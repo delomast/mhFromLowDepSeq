@@ -4,9 +4,11 @@
 import sys
 import pysam
 from math import log, exp
-from scipy.special import logsumexp
 import numpy as np
-from datetime import datetime # for some quick and dirty profiling
+
+def lse(a):
+	c = a.max()
+	return c + np.log(np.sum(np.exp(a - c)))
 
 # function to estimate expected heterozygosity
 # of a microhap from low coverage sequencing data
@@ -24,10 +26,6 @@ def calcHe(reads, pos):
 	indReads = []
 	for ind in reads: # for each individual
 
-		# TODO
-		# match up paired reads
-		# extract all reads labeled with names
-		# then for any duplicates, go to first and fill in any gaps with the second
 		readNames = []
 		tempInd = []
 		for r in ind: # for each read
@@ -91,8 +89,10 @@ def calcHe(reads, pos):
 			else:
 				tempInd += [tempRead]
 				readNames += [r.query_name]
-		indReads += [tempInd]
-	numReads = np.array([j for j in [len(i) for i in indReads] if j > 0])
+		# if one or more read, save and use in estimates
+		if len(tempInd) > 0:
+			indReads += [tempInd]
+	numReads = np.array([len(i) for i in indReads])
 	numInds = len(numReads) # number of inds with >= 1 read
 	numReads = np.sum(numReads) # total number of reads
 	skip = False
@@ -159,10 +159,12 @@ def calcHe(reads, pos):
 	tolerance = .0001
 	L2 = log(2) # saving to avoid repeated computation by interpreter
 	lastLLH = 0
+	# initialize some variables
+	priorZ = np.zeros(genos.shape[0]) # prior prob of all genos
+	genoProb = np.zeros((indLLH.shape[0], genos.shape[0])) # llh and then posterior of individuals(rows) x genotypes(columns)
 	for numIter in range(0, maxIter):
 		# Calculate P(Z|reads, af)
 		# first calculate log of prior prob of each genotype
-		priorZ = np.zeros(genos.shape[0])
 		afLog = np.log(af)
 		for i in range(0, genos.shape[0]):
 			if genos[i,0] == genos[i,1]: # homozygous
@@ -172,12 +174,11 @@ def calcHe(reads, pos):
 		# now calculate P(Z| reads, af)
 		# and calculate likelihood of total model
 		totalLLH = 0
-		genoProb = np.zeros((indLLH.shape[0], genos.shape[0]))
 		for i in range(0, indLLH.shape[0]):
 			# calc (relative) probability of each genotype
 			# prior * likelihood
 			genoProb[i,:] = priorZ + indLLH[i,:]
-			temp_lse = logsumexp(genoProb[i,:])
+			temp_lse = lse(genoProb[i,:])
 			totalLLH += temp_lse
 			# now normalize
 			genoProb[i,:] = np.exp(genoProb[i,:] - temp_lse)
@@ -189,12 +190,12 @@ def calcHe(reads, pos):
 		
 		# Maximization of LLH for af (calculate af given P(Z))
 		# first calc number of each genotype (fractional)
-		genoProb = np.sum(genoProb, 0)
+		genoProb2 = np.sum(genoProb, 0)
 		# now allele frequency
 		af = np.zeros(len(allMH))
-		for i in range(0, genoProb.shape[0]):
-			af[genos[i,0]] += genoProb[i]
-			af[genos[i,1]] += genoProb[i]
+		for i in range(0, genoProb2.shape[0]):
+			af[genos[i,0]] += genoProb2[i]
+			af[genos[i,1]] += genoProb2[i]
 		# and normalize
 		af = af / (2 * indLLH.shape[0])
 		# end for loop for EM
@@ -204,8 +205,6 @@ def calcHe(reads, pos):
 
 
 def Main():
-
-	print("start ", str(datetime.now()))
 	
 	# defaults
 	popMap = None # -m, maps bam files (individuals) to populations. bamFilePath \t popName
@@ -254,9 +253,7 @@ def Main():
 			line = fileIn.readline()
 	# list of pop names so output can have a consistent order
 	masterPop = [p for p in popDict]
-	
-	print("start window eval ", str(datetime.now()))
-	
+		
 	# run sliding window across target SNP file
 	with open(snpPos, "r") as snpLocations, open(HeOut, "w") as HeOutFile:
 	
@@ -320,7 +317,5 @@ def Main():
 		for k in sorted(list(numSnpsPerWindow)):
 			print(k, numSnpsPerWindow[k])
 		
-		print("end ", str(datetime.now()))
-
 if __name__ == '__main__':
 	Main()
