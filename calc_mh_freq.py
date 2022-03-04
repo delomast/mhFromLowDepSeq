@@ -28,18 +28,28 @@ def calcHe(reads, pos):
 		# match up paired reads
 		# extract all reads labeled with names
 		# then for any duplicates, go to first and fill in any gaps with the second
-		
+		readNames = []
 		tempInd = []
 		for r in ind: # for each read
-			# get sites of SNPs
+			# get base calles for SNPs
 			j = r.reference_start # position in the reference, 0 based
 			k = 0 # position in the query
 			c = 0 # position in the CIGAR string
-			tempRead = ["N"] * maxI # if read is missing SNPs, it will have "N" in those positions
+			# determine if it's the pair of an earlier read
+			pair = False
+			if r.query_name in readNames:
+				pair = True
+				matePos = readNames.index(r.query_name)
+				tempRead = tempInd[matePos]
+			else:
+				tempRead = ["N"] * maxI # if read is missing SNPs, it will have "N" in those positions
 			for i in range(0, maxI): # for each SNP
 				# check if passed SNP
 				if j > pos[i]:
 					continue # go to the next SNP
+				# if paired, only overwrite "N"s
+				if pair and tempRead[i] != "N":
+					continue
 				for cPos in range(c, len(r.cigartuples)):
 					if r.cigartuples[cPos][0] in (0,7,8):
 						# match
@@ -76,7 +86,11 @@ def calcHe(reads, pos):
 					if j > pos[i]:
 						break # go to the next SNP
 
-			tempInd += [tempRead]
+			if pair:
+				tempInd[matePos] = tempRead
+			else:
+				tempInd += [tempRead]
+				readNames += [r.query_name]
 		indReads += [tempInd]
 	numReads = np.array([j for j in [len(i) for i in indReads] if j > 0])
 	numInds = len(numReads) # number of inds with >= 1 read
@@ -142,11 +156,10 @@ def calcHe(reads, pos):
 	# MLE (EM algorithm) for allele frequency
 	af = np.repeat(1/len(allMH), len(allMH)) # start off w/ equal frequencies
 	maxIter = 1000
-	numIter = 0
 	tolerance = .0001
 	L2 = log(2) # saving to avoid repeated computation by interpreter
 	lastLLH = 0
-	while numIter < maxIter:
+	for numIter in range(0, maxIter):
 		# Calculate P(Z|reads, af)
 		# first calculate log of prior prob of each genotype
 		priorZ = np.zeros(genos.shape[0])
@@ -184,9 +197,7 @@ def calcHe(reads, pos):
 			af[genos[i,1]] += genoProb[i]
 		# and normalize
 		af = af / (2 * indLLH.shape[0])
-		
-		numIter += 1
-		# end while loop for EM
+		# end for loop for EM
 	
 	# calculate He from allele frequency and return
 	return [str(1 - np.sum(np.power(af, 2))), str(numReads), str(numInds)]
