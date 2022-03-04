@@ -4,15 +4,17 @@
 import sys
 import pysam
 from math import log, exp
-from scipy.special import logsumexp
 import numpy as np
-from datetime import datetime # for some quick and dirty profiling
+
+def lse(a):
+	c = a.max()
+	return c + np.log(np.sum(np.exp(a - c)))
 
 # function to estimate expected heterozygosity
 # of a microhap from low coverage sequencing data
 # within ONE population
 # @param reads a list of iterators. Each iterator (pysam) is for reads for one individual
-# @param pos a list of positions of SNPs (1-based, on reference) in the window
+# @param pos a list of positions of SNPs (0-based, on reference) in the window
 # @return either the expected heterozygosity as a float or (if not enough information to estimate) the string "NA"
 def calcHe(reads, pos):
 	eps = 0.01
@@ -24,37 +26,73 @@ def calcHe(reads, pos):
 	indReads = []
 	for ind in reads: # for each individual
 
-		# TODO
-		# match up paired reads
-		# extract all reads labeled with names
-		# then for any duplicates, go to first and fill in any gaps with the second
-		
+		readNames = []
 		tempInd = []
 		for r in ind: # for each read
-			# get sites of SNPs
-			# looping through all matches, if too slow, can change to
-			# parsing the CIGAR string and jumping
-			matches = r.get_aligned_pairs(matches_only = True)
-			i = 0
-			j = 0
-			maxJ = len(matches)
-			tempRead = ["N"] * maxI # if read is missing SNPs, it will have "N" in those positions
-			while j < maxJ and i < maxI:
-				if matches[j][1] < pos[i]:
-					j += 1 # go to next base in the read
-				elif matches[j][1] == pos[i]:
-					# add the base called
-					base = r.query_sequence[matches[j][0]]
-					tempRead[i] = base
-					if base != "N":
-						alleles[i][base] = 1
-					i += 1
-					j += 1
-				else:
-					i += 1 # go to next snp, stay on same base in read
-			tempInd += [tempRead]
-		indReads += [tempInd]
-	numReads = np.array([j for j in [len(i) for i in indReads] if j > 0])
+			# get base calles for SNPs
+			j = r.reference_start # position in the reference, 0 based
+			k = 0 # position in the query
+			c = 0 # position in the CIGAR string
+			# determine if it's the pair of an earlier read
+			pair = False
+			if r.query_name in readNames:
+				pair = True
+				matePos = readNames.index(r.query_name)
+				tempRead = tempInd[matePos]
+			else:
+				tempRead = ["N"] * maxI # if read is missing SNPs, it will have "N" in those positions
+			for i in range(0, maxI): # for each SNP
+				# check if passed SNP
+				if j > pos[i]:
+					continue # go to the next SNP
+				# if paired, only overwrite "N"s
+				if pair and tempRead[i] != "N":
+					continue
+				for cPos in range(c, len(r.cigartuples)):
+					if r.cigartuples[cPos][0] in (0,7,8):
+						# match
+						# if target SNP is in the range
+						if pos[i] < (j + r.cigartuples[cPos][1]) and pos[i] >= j: # >= j is defensive, should never be False b/c would have skipped
+							# pull the target base from the query
+							base = r.query_sequence[k + pos[i] - j]
+							tempRead[i] = base
+							if base != "N":
+								alleles[i][base] = 1
+							# we don't advance anything b/c the current positions are
+							# where we want to start to look for the next SNP
+							# just move to the next SNP
+							break
+						else:
+							# consume both
+							k += r.cigartuples[cPos][1]
+							j += r.cigartuples[cPos][1]
+							c += 1
+					elif r.cigartuples[cPos][0] in (1,4):
+						# insertion or soft clip, consume query not ref
+						k += r.cigartuples[cPos][1]
+						c += 1
+					elif r.cigartuples[cPos][0] in (2,3):
+						# deletion or skip, consume ref not query
+						j += r.cigartuples[cPos][1]
+						c += 1
+					elif r.cigartuples[cPos][0] in (5,6):
+						# hard clip or padding, do nothing
+						pass
+					else:
+						raise RuntimeError("unrecognized CIGAR operation")
+					# check if passed SNP
+					if j > pos[i]:
+						break # go to the next SNP
+
+			if pair:
+				tempInd[matePos] = tempRead
+			else:
+				tempInd += [tempRead]
+				readNames += [r.query_name]
+		# if one or more read, save and use in estimates
+		if len(tempInd) > 0:
+			indReads += [tempInd]
+	numReads = np.array([len(i) for i in indReads])
 	numInds = len(numReads) # number of inds with >= 1 read
 	numReads = np.sum(numReads) # total number of reads
 	skip = False
@@ -72,7 +110,7 @@ def calcHe(reads, pos):
 		allSNPAlleles += [list(d)]
 	if skip:
 		# no information on entire locus
-		return ["NA", numReads, numInds]
+		return ["NA", str(numReads), str(numInds)]
 	allMH = allSNPAlleles[0]
 	for i in range(1, len(allSNPAlleles)):
 		allMHnew = []		
@@ -84,17 +122,16 @@ def calcHe(reads, pos):
 	for i in range(0, len(allMH)):
 		for j in range(i, len(allMH)):
 			genos += [[i, j]] # allele1, allele2 INDICIES WITHIN allMH
+	genos = np.array(genos)
 	
 	# calculate log-likelihoods for each genotype for each individual
-	indLLH = np.zeros((len(indReads), len(genos))) # indices: individual, genotype; value: log-likelihood
+	indLLH = np.zeros((len(indReads), genos.shape[0])) # indices: individual, genotype; value: log-likelihood
 	for i in range(0, len(indReads)): # for each individual
-		ind = indReads[i]
-		for j in range(0, len(genos)): # for each genotype
-			g = genos[j]
-			a1 = allMH[g[0]] # character strings
-			a2 = allMH[g[1]] # character strings
+		for j in range(0, genos.shape[0]): # for each genotype
+			a1 = allMH[genos[j,0]] # character strings
+			a2 = allMH[genos[j,1]] # character strings
 			tempLLH = 0
-			for r in ind: # for each read	
+			for r in indReads[i]: # for each read	
 				LH_a1 = 1 # these are likelihoods, NOT log
 				LH_a2 = 1
 				for k in range(0, len(r)): # for each SNP pos in the read
@@ -119,30 +156,29 @@ def calcHe(reads, pos):
 	# MLE (EM algorithm) for allele frequency
 	af = np.repeat(1/len(allMH), len(allMH)) # start off w/ equal frequencies
 	maxIter = 1000
-	numIter = 0
 	tolerance = .0001
-	L2 = log(2) # b/c python isn't compiled, need to save this value to avaoid repeated computation
+	L2 = log(2) # saving to avoid repeated computation by interpreter
 	lastLLH = 0
-	while numIter < maxIter:
+	# initialize some variables
+	priorZ = np.zeros(genos.shape[0]) # prior prob of all genos
+	genoProb = np.zeros((indLLH.shape[0], genos.shape[0])) # llh and then posterior of individuals(rows) x genotypes(columns)
+	for numIter in range(0, maxIter):
 		# Calculate P(Z|reads, af)
 		# first calculate log of prior prob of each genotype
-		priorZ = np.zeros(len(genos))
-		for i in range(0, len(genos)):
-			a1 = genos[i][0]
-			a2 = genos[i][1]
-			if a1 == a2:
-				priorZ[i] = 2 * log(af[a1])
+		afLog = np.log(af)
+		for i in range(0, genos.shape[0]):
+			if genos[i,0] == genos[i,1]: # homozygous
+				priorZ[i] = 2 * afLog[genos[i,0]]
 			else:
-				priorZ[i] = L2 + log(af[a1]) + log(af[a2])
+				priorZ[i] = L2 + afLog[genos[i,0]] + afLog[genos[i,1]]
 		# now calculate P(Z| reads, af)
 		# and calculate likelihood of total model
 		totalLLH = 0
-		genoProb = np.zeros((indLLH.shape[0], len(genos)))
 		for i in range(0, indLLH.shape[0]):
 			# calc (relative) probability of each genotype
 			# prior * likelihood
 			genoProb[i,:] = priorZ + indLLH[i,:]
-			temp_lse = logsumexp(genoProb[i,:])
+			temp_lse = lse(genoProb[i,:])
 			totalLLH += temp_lse
 			# now normalize
 			genoProb[i,:] = np.exp(genoProb[i,:] - temp_lse)
@@ -154,29 +190,25 @@ def calcHe(reads, pos):
 		
 		# Maximization of LLH for af (calculate af given P(Z))
 		# first calc number of each genotype (fractional)
-		genoProb = np.sum(genoProb, 0)
+		genoProb2 = np.sum(genoProb, 0)
 		# now allele frequency
 		af = np.zeros(len(allMH))
-		for i in range(0, len(genoProb)):
-			af[genos[i][0]] += genoProb[i]
-			af[genos[i][1]] += genoProb[i]
+		for i in range(0, genoProb2.shape[0]):
+			af[genos[i,0]] += genoProb2[i]
+			af[genos[i,1]] += genoProb2[i]
 		# and normalize
 		af = af / (2 * indLLH.shape[0])
-		
-		numIter += 1
-		# end while loop for EM
+		# end for loop for EM
 	
 	# calculate He from allele frequency and return
-	return [1 - np.sum(np.power(af, 2)), numReads, numInds]
+	return [str(1 - np.sum(np.power(af, 2))), str(numReads), str(numInds)]
 
 
 def Main():
-
-	print("start ", str(datetime.now()))
 	
 	# defaults
 	popMap = None # -m, maps bam files (individuals) to populations. bamFilePath \t popName
-	snpPos = None # -s, snp positions Chr \t Position (1-based)
+	snpPos = None # -s, snp positions Chr \t Position (1-based) MUST BE SORTED SMALLEST TO LARGEST
 	wS = 60 # -w, window size
 	maxSNPs = 8 # -ms, maximum number of SNPs in a window (if exceeded, window is skipped)
 	HeOut = "He_mh.txt" # -o, output file name
@@ -221,9 +253,7 @@ def Main():
 			line = fileIn.readline()
 	# list of pop names so output can have a consistent order
 	masterPop = [p for p in popDict]
-	
-	print("start window eval ", str(datetime.now()))
-	
+		
 	# run sliding window across target SNP file
 	with open(snpPos, "r") as snpLocations, open(HeOut, "w") as HeOutFile:
 	
@@ -263,13 +293,9 @@ def Main():
 					# this could be done in the previous loop, but seperating it out
 					# to allow easy transition to calculating each pop in parallel if
 					# later desired
-					# create list of [str(He), str(He), ...] in order of masterPop and number of reads and inds
 					tempRes = [calcHe(reads[pop], cur) for pop in masterPop]
-					He_results = [str(i[0]) for i in tempRes]
-					numReads = [str(i[1]) for i in tempRes]
-					numInds = [str(i[2]) for i in tempRes]
 					# and write to output
-					HeOutFile.write("\t".join([curChr, ",".join([str(x) for x in cur])] + He_results + numReads + numInds) + "\n")
+					HeOutFile.write("\t".join([curChr, ",".join([str(x) for x in cur])] + [i[0] for i in tempRes] + [i[1] for i in tempRes] + [i[2] for i in tempRes]) + "\n")
 					
 					# TODO
 					# optional output of allele frequencies
@@ -291,7 +317,5 @@ def Main():
 		for k in sorted(list(numSnpsPerWindow)):
 			print(k, numSnpsPerWindow[k])
 		
-		print("end ", str(datetime.now()))
-
 if __name__ == '__main__':
 	Main()
