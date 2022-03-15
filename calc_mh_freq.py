@@ -10,13 +10,16 @@ def lse(a):
 	c = a.max()
 	return c + np.log(np.sum(np.exp(a - c)))
 
-# function to estimate expected heterozygosity
+# function to run EM algorithm for estimating either 
+# expected heterozygosity or allele frequencies
 # of a microhap from low coverage sequencing data
 # within ONE population
 # @param reads a list of iterators. Each iterator (pysam) is for reads for one individual
 # @param pos a list of positions of SNPs (0-based, on reference) in the window
+# @param alleleFreq boolean to indicate whether to output allele frequencies (True) or expectedHet (False)
+# @param minAF minimum allele frequency to keep an allele in the analysis
 # @return either the expected heterozygosity as a float or (if not enough information to estimate) the string "NA"
-def calcHe(reads, pos):
+def calcEM(reads, pos, alleleFreq, minAF):
 	eps = 0.01
 	# change pos to 0-based
 	pos = [x - 1 for x in pos]
@@ -201,7 +204,15 @@ def calcHe(reads, pos):
 		# end for loop for EM
 	
 	# calculate He from allele frequency and return
-	return [str(1 - np.sum(np.power(af, 2))), str(numReads), str(numInds)]
+	He = [str(1 - np.sum(np.power(af, 2))), str(numReads), str(numInds)]
+	
+	# return allele frequencies if indicated
+	if af:
+		# allele1:freq,allele2:freq,...
+		afStr = [allMH[i] + ":" + str(af[i]) for i in range(0, len(af)) if af[i] >= minAF]
+		He += [",".join(afStr)]
+	
+	return He
 
 
 def Main():
@@ -212,6 +223,8 @@ def Main():
 	wS = 60 # -w, window size
 	maxSNPs = 8 # -ms, maximum number of SNPs in a window (if exceeded, window is skipped)
 	HeOut = "He_mh.txt" # -o, output file name
+	af = False # -af, whether to output allele frequencies instead of He
+	minAF = 0.0001 # -minAF minimum allele frequency to report allele frequency for
 	# get command line inputs
 	flag = 1
 	while flag < len(sys.argv):	#start at 1 b/c 0 is name of script
@@ -227,6 +240,9 @@ def Main():
 		elif sys.argv[flag] == "-ms":
 			flag += 1
 			maxSNPs = int(sys.argv[flag])
+		elif sys.argv[flag] == "-af":
+			flag += 1
+			af = True
 		elif sys.argv[flag] == "-o":
 			flag += 1
 			HeOut = sys.argv[flag]
@@ -258,7 +274,10 @@ def Main():
 	with open(snpPos, "r") as snpLocations, open(HeOut, "w") as HeOutFile:
 	
 		# write header on output file
-		HeOutFile.write("\t".join(["Chr", "Pos"] + masterPop + ["NumReads_" + p for p in masterPop] + ["NumInds_" + p for p in masterPop]) + "\n")
+		lineOut = ["Chr", "Pos"] + masterPop + ["NumReads_" + p for p in masterPop] + ["NumInds_" + p for p in masterPop]
+		if af:
+			lineOut += ["AlleleFreq_" + p for p in masterPop]
+		HeOutFile.write("\t".join() + "\n")
 		
 		# set up beginning of first window
 		cur = snpLocations.readline().rstrip().split("\t")
@@ -293,12 +312,12 @@ def Main():
 					# this could be done in the previous loop, but seperating it out
 					# to allow easy transition to calculating each pop in parallel if
 					# later desired
-					tempRes = [calcHe(reads[pop], cur) for pop in masterPop]
+					tempRes = [calcEM(reads[pop], cur, af, minAF) for pop in masterPop]
 					# and write to output
-					HeOutFile.write("\t".join([curChr, ",".join([str(x) for x in cur])] + [i[0] for i in tempRes] + [i[1] for i in tempRes] + [i[2] for i in tempRes]) + "\n")
-					
-					# TODO
-					# optional output of allele frequencies
+					lineOut = [curChr, ",".join([str(x) for x in cur])] + [i[0] for i in tempRes] + [i[1] for i in tempRes] + [i[2] for i in tempRes]
+					if af:
+						lineOut += [i[3] for i in tempRes]
+					HeOutFile.write("\t".join(lineOut) + "\n")
 				
 				# advance to next window
 				if curChr == nextR[0]:
@@ -310,6 +329,28 @@ def Main():
 					curChr = nextR[0]
 					cur = [nextR[1]]
 			nextR = snpLocations.readline()
+			
+		# while loop will end with the last window un-evaluated
+		# evaluate last window
+		numWindows += 1
+		numSnpsPerWindow[len(cur)] = numSnpsPerWindow.get(len(cur), 0) + 1
+		# skip if too many SNPs
+		if len(cur) <= maxSNPs:
+			# get reads for each individual
+			# remember you don't want to have multiple fetch iterators being used
+			# on the same file simultaneously unless you open multiple file handles
+			reads = {} # this is dict, key is pop, value is list of iterators (one iterator per ind)
+			for pop in masterPop:
+				reads[pop] = [f.fetch(contig=curChr, start=(cur[0] - 1), stop=cur[-1]) for f in popDict[pop]]
+				
+			# now calculate expHet within each pop
+			# this could be done in the previous loop, but seperating it out
+			# to allow easy transition to calculating each pop in parallel if
+			# later desired
+			tempRes = [calcHe(reads[pop], cur) for pop in masterPop]
+			# and write to output
+			HeOutFile.write("\t".join([curChr, ",".join([str(x) for x in cur])] + [i[0] for i in tempRes] + [i[1] for i in tempRes] + [i[2] for i in tempRes]) + "\n")
+
 		# print some summary information
 		print("number of windows: ", numWindows)
 		print("Distribution of SNPs per window")
