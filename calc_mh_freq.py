@@ -113,7 +113,10 @@ def calcEM(reads, pos, alleleFreq, minAF):
 		allSNPAlleles += [list(d)]
 	if skip:
 		# no information on entire locus
-		return ["NA", str(numReads), str(numInds)]
+		lineOut = ["NA", str(numReads), str(numInds)]
+		if alleleFreq:
+			lineOut += ["NA"]
+		return lineOut
 	allMH = allSNPAlleles[0]
 	for i in range(1, len(allSNPAlleles)):
 		allMHnew = []		
@@ -207,7 +210,7 @@ def calcEM(reads, pos, alleleFreq, minAF):
 	He = [str(1 - np.sum(np.power(af, 2))), str(numReads), str(numInds)]
 	
 	# return allele frequencies if indicated
-	if af:
+	if alleleFreq:
 		# allele1:freq,allele2:freq,...
 		afStr = [allMH[i] + ":" + str(af[i]) for i in range(0, len(af)) if af[i] >= minAF]
 		He += [",".join(afStr)]
@@ -243,6 +246,9 @@ def Main():
 		elif sys.argv[flag] == "-af":
 			flag += 1
 			af = True
+		elif sys.argv[flag] == "-minAF":
+			flag += 1
+			minAF = float(sys.argv[flag])
 		elif sys.argv[flag] == "-o":
 			flag += 1
 			HeOut = sys.argv[flag]
@@ -277,7 +283,7 @@ def Main():
 		lineOut = ["Chr", "Pos"] + masterPop + ["NumReads_" + p for p in masterPop] + ["NumInds_" + p for p in masterPop]
 		if af:
 			lineOut += ["AlleleFreq_" + p for p in masterPop]
-		HeOutFile.write("\t".join() + "\n")
+		HeOutFile.write("\t".join(lineOut) + "\n")
 		
 		# set up beginning of first window
 		cur = snpLocations.readline().rstrip().split("\t")
@@ -347,9 +353,12 @@ def Main():
 			# this could be done in the previous loop, but seperating it out
 			# to allow easy transition to calculating each pop in parallel if
 			# later desired
-			tempRes = [calcHe(reads[pop], cur) for pop in masterPop]
+			tempRes = [calcEM(reads[pop], cur, af, minAF) for pop in masterPop]
 			# and write to output
-			HeOutFile.write("\t".join([curChr, ",".join([str(x) for x in cur])] + [i[0] for i in tempRes] + [i[1] for i in tempRes] + [i[2] for i in tempRes]) + "\n")
+			lineOut = [curChr, ",".join([str(x) for x in cur])] + [i[0] for i in tempRes] + [i[1] for i in tempRes] + [i[2] for i in tempRes]
+			if af:
+				lineOut += [i[3] for i in tempRes]
+			HeOutFile.write("\t".join(lineOut) + "\n")
 
 		# print some summary information
 		print("number of windows: ", numWindows)
