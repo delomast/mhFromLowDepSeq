@@ -6,9 +6,29 @@ import pysam
 from math import log, exp
 import numpy as np
 
+# log of the sum of the exponents
+# @param a a numpy array, numeric
 def lse(a):
 	c = a.max()
 	return c + np.log(np.sum(np.exp(a - c)))
+
+# convert Q on the phred scale to P - prob the base was sequenced wrong
+# @param Q an int, note that this has already been converted from ASCII
+#    and had the 33 subtracted from it
+def phredQtoP(Q):
+	return 10**(-Q/10)
+	
+# calculate probability the basecall is wrong given the probability
+# that the base on the template was wrong and the Q (from sequencer phred score)
+# assumes that if an error is made in either spot, the probabilty of being any other base is equal
+# @param eps probability that the base on the template in the sequencer was wrong
+# @param e2 prob the base was sequenced wrong, the output of phredQtoP(Q)
+def probSubErr(eps, e2):
+	# template wrong, sequencer correct + 
+	#   template wrong, sequencer wrong and didn't randomly call correct +
+	#   template right, sequencer wrong
+	return (eps * (1 - e2)) + (0.6666666667 * eps * e2) + ((1 - eps) * e2)
+
 
 # function to run EM algorithm for estimating either 
 # expected heterozygosity or allele frequencies
@@ -16,23 +36,24 @@ def lse(a):
 # within ONE population
 # @param reads a list of iterators. Each iterator (pysam) is for reads for one individual
 # @param pos a list of positions of SNPs (0-based, on reference) in the window
-# @param alleleFreq boolean to indicate whether to output allele frequencies (True) or expectedHet (False)
+# @param alleleFreq boolean to indicate whether to output allele frequencies (True) or just expectedHet (False)
 # @param minAF minimum allele frequency to keep an allele in the analysis
 # @return either the expected heterozygosity as a float or (if not enough information to estimate) the string "NA"
-def calcEM(reads, pos, alleleFreq, minAF):
-	eps = 0.01
+def calcEM(reads, pos, alleleFreq, minAF, epsTemplate):
 	# change pos to 0-based
 	pos = [x - 1 for x in pos]
 	maxI = len(pos) # used several times below
 	alleles = [{} for x in range(0,maxI)]
 	# pull relevant sites and Qual scores from reads for each individual
 	indReads = []
+	indQuals = []
 	for ind in reads: # for each individual
 
 		readNames = []
 		tempInd = []
+		tempQual = []
 		for r in ind: # for each read
-			# get base calles for SNPs
+			# get base calls for SNPs
 			j = r.reference_start # position in the reference, 0 based
 			k = 0 # position in the query
 			c = 0 # position in the CIGAR string
@@ -42,8 +63,10 @@ def calcEM(reads, pos, alleleFreq, minAF):
 				pair = True
 				matePos = readNames.index(r.query_name)
 				tempRead = tempInd[matePos]
+				tempReadQual = tempQual[matePos]
 			else:
 				tempRead = ["N"] * maxI # if read is missing SNPs, it will have "N" in those positions
+				tempReadQual = [1] * maxI # if read is missing SNPs, it will have "N" in those positions
 			for i in range(0, maxI): # for each SNP
 				# check if passed SNP
 				if j > pos[i]:
@@ -58,7 +81,15 @@ def calcEM(reads, pos, alleleFreq, minAF):
 						if pos[i] < (j + r.cigartuples[cPos][1]) and pos[i] >= j: # >= j is defensive, should never be False b/c would have skipped
 							# pull the target base from the query
 							base = r.query_sequence[k + pos[i] - j]
-							tempRead[i] = base
+							# pull the target quality from the query
+							qual = phredQtoP(r.query_qualities[k + pos[i] - j])
+							if pair and qual >= tempReadQual[i]:
+								# if paired reads overlap at this base, then
+								# skip if qual is lower than existing
+								break
+							else:
+								tempRead[i] = base
+								tempReadQual[i] = qual
 							if base != "N":
 								alleles[i][base] = 1
 							# we don't advance anything b/c the current positions are
@@ -89,12 +120,15 @@ def calcEM(reads, pos, alleleFreq, minAF):
 
 			if pair:
 				tempInd[matePos] = tempRead
+				tempQual[matePos] = tempReadQual
 			else:
 				tempInd += [tempRead]
+				tempQual += [tempReadQual]
 				readNames += [r.query_name]
 		# if one or more read, save and use in estimates
 		if len(tempInd) > 0:
 			indReads += [tempInd]
+			indQuals += [tempQual]
 	numReads = np.array([len(i) for i in indReads])
 	numInds = len(numReads) # number of inds with >= 1 read
 	numReads = np.sum(numReads) # total number of reads
@@ -137,23 +171,27 @@ def calcEM(reads, pos, alleleFreq, minAF):
 			a1 = allMH[genos[j,0]] # character strings
 			a2 = allMH[genos[j,1]] # character strings
 			tempLLH = 0
-			for r in indReads[i]: # for each read	
+			for m in range(0, len(indReads[i])): # for each read
+				r = indReads[i][m]
+				q = indQuals[i][m]
 				LH_a1 = 1 # these are likelihoods, NOT log
 				LH_a2 = 1
 				for k in range(0, len(r)): # for each SNP pos in the read
 					# is it missing? then skip
 					if r[k] == "N":
 						continue
+					# calc prob of error
+					eps = probSubErr(epsTemplate, q[k])
 					# does it match allele 1?
 					if r[k] == a1[k]:
 						LH_a1 *= 1 - eps
 					else:
-						LH_a1 *= eps
+						LH_a1 *= eps / 3
 					# does it match allele 2?
 					if r[k] == a2[k]:
 						LH_a2 *= 1 - eps
 					else:
-						LH_a2 *= eps
+						LH_a2 *= eps / 3
 				# switching to log-likelihood here
 				tempLLH += log(0.5 * (LH_a1 + LH_a2))
 			# save LLH for ind, genos
@@ -228,6 +266,7 @@ def Main():
 	HeOut = "He_mh.txt" # -o, output file name
 	af = False # -af, whether to output allele frequencies instead of He
 	minAF = 0.0001 # -minAF minimum allele frequency to report allele frequency for
+	epsTemplate = 0.01 # -eps probability a base in the template is wrong
 	# get command line inputs
 	flag = 1
 	while flag < len(sys.argv):	#start at 1 b/c 0 is name of script
@@ -249,6 +288,9 @@ def Main():
 		elif sys.argv[flag] == "-minAF":
 			flag += 1
 			minAF = float(sys.argv[flag])
+		elif sys.argv[flag] == "-eps":
+			flag += 1
+			epsTemplate = float(sys.argv[flag])
 		elif sys.argv[flag] == "-o":
 			flag += 1
 			HeOut = sys.argv[flag]
@@ -318,7 +360,7 @@ def Main():
 					# this could be done in the previous loop, but seperating it out
 					# to allow easy transition to calculating each pop in parallel if
 					# later desired
-					tempRes = [calcEM(reads[pop], cur, af, minAF) for pop in masterPop]
+					tempRes = [calcEM(reads[pop], cur, af, minAF, epsTemplate) for pop in masterPop]
 					# and write to output
 					lineOut = [curChr, ",".join([str(x) for x in cur])] + [i[0] for i in tempRes] + [i[1] for i in tempRes] + [i[2] for i in tempRes]
 					if af:
@@ -353,7 +395,7 @@ def Main():
 			# this could be done in the previous loop, but seperating it out
 			# to allow easy transition to calculating each pop in parallel if
 			# later desired
-			tempRes = [calcEM(reads[pop], cur, af, minAF) for pop in masterPop]
+			tempRes = [calcEM(reads[pop], cur, af, minAF, epsTemplate) for pop in masterPop]
 			# and write to output
 			lineOut = [curChr, ",".join([str(x) for x in cur])] + [i[0] for i in tempRes] + [i[1] for i in tempRes] + [i[2] for i in tempRes]
 			if af:
@@ -366,6 +408,24 @@ def Main():
 		print("SNPs ", "NumberOfWindows")
 		for k in sorted(list(numSnpsPerWindow)):
 			print(k, numSnpsPerWindow[k])
-		
+
+
+# This iteratively runs the EM while dropping alleles to account for 
+# windows with lots of SNPs (too many to efficiently consider all possible haplotypes
+# 
+# function to run EM algorithm for estimating either 
+# expected heterozygosity or allele frequencies
+# of a microhap from low coverage sequencing data
+# within ONE population
+# @param reads a list of iterators. Each iterator (pysam) is for reads for one individual
+# @param pos a list of positions of SNPs (0-based, on reference) in the window
+# @param alleleFreq boolean to indicate whether to output allele frequencies (True) or just expectedHet (False)
+# @param minAF minimum allele frequency to keep an allele in the analysis
+# @param maxNumHaplotypes maximum number of haplotypes to consider in one round. Note that if
+#    adding one more position exceeds this value, "NA" will be returned
+# @return either the expected heterozygosity as a float or (if not enough information to estimate) the string "NA"
+# def iterEM(reads, pos, alleleFreq, minAF):
+
+	
 if __name__ == '__main__':
 	Main()
