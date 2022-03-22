@@ -359,8 +359,8 @@ def Main():
 	# defaults
 	popMap = None # -m, maps bam files (individuals) to populations. bamFilePath \t popName
 	snpPos = None # -s, snp positions Chr \t Position (1-based) MUST BE SORTED SMALLEST TO LARGEST
-	wS = 60 # -w, window size
-	maxSNPs = 8 # -ms, maximum number of SNPs in a window (if exceeded, window is skipped)
+	wS = 125 # -w, window size
+	maxSNPs = 25 # -ms, maximum number of SNPs in a window (if exceeded, window is skipped)
 	HeOut = "He_mh.txt" # -o, output file name
 	af = False # -af, whether to output allele frequencies instead of He
 	minAF = 0.001 # -minAF minimum allele frequency to report allele frequency for
