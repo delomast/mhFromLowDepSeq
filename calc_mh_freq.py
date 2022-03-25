@@ -548,8 +548,8 @@ def Main():
 	wS = 125 # -w, window size
 	maxSNPs = 25 # -ms, maximum number of SNPs in a window (if exceeded, window is skipped)
 	HeOut = "He_mh.txt" # -o, output file name
-	af = False # -af, whether to output allele frequencies instead of He
-	minAF = 0.001 # -minAF minimum allele frequency to report allele frequency for
+	af = False # -af, whether to output allele frequencies He
+	minAF = 0.001 # -minAF minimum allele frequency to keep in the model when iterating over a large window
 	epsTemplate = 0.01 # -eps probability a base in the template is wrong
 	maxNumHaplotypes = None # -maxH maximum number of haplotypes to try to estimate for
 	maxSNPsAdd = 4 # -maxS maximum number of SNPs to add in one iteration
@@ -594,7 +594,7 @@ def Main():
 		flag += 1
 	# end while loop for command line arguments
 	
-	# differnet default for pooled vs individual data
+	# different default for pooled vs individual data
 	if maxNumHaplotypes is None:
 		if pooledData:
 			maxNumHaplotypes = 256
@@ -603,6 +603,9 @@ def Main():
 	
 	if popMap is None or snpPos is None:
 		print("Error: both -m and -s must be specified")
+		return
+	if maxSNPsAdd < 1:
+		print("Error: -ms must be 1 or greater")
 		return
 	
 	print("Window size", wS, "bp")
