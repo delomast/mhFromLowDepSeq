@@ -52,6 +52,7 @@ def pullReadsQualsPotenAlleles(ind, pos):
 		c = 0 # position in the CIGAR string
 		# determine if it's the pair of an earlier read
 		pair = False
+		hasABaseCall = False # Whether the read is informative for >= 1 target SNP
 		if r.query_name in readNames:
 			pair = True
 			matePos = readNames.index(r.query_name)
@@ -64,9 +65,6 @@ def pullReadsQualsPotenAlleles(ind, pos):
 			# check if passed SNP
 			if j > pos[i]:
 				continue # go to the next SNP
-			# if paired, only overwrite "N"s
-			if pair and tempRead[i] != "N":
-				continue
 			for cPos in range(c, len(r.cigartuples)):
 				if r.cigartuples[cPos][0] in (0,7,8):
 					# match
@@ -78,9 +76,11 @@ def pullReadsQualsPotenAlleles(ind, pos):
 						qual = phredQtoP(r.query_qualities[k + pos[i] - j])
 						if pair and qual >= tempReadQual[i]:
 							# if paired reads overlap at this base, then
-							# skip if qual is lower than existing
+							# skip if probability base is wrong is higher than existing
 							break
 						else:
+							if base != "N":
+								hasABaseCall = True
 							tempRead[i] = base
 							tempReadQual[i] = qual
 						# we don't advance anything b/c the current positions are
@@ -108,7 +108,8 @@ def pullReadsQualsPotenAlleles(ind, pos):
 				# check if passed SNP
 				if j > pos[i]:
 					break # go to the next SNP
-
+		if not hasABaseCall:
+			continue # skip if no base calls for target SNPs
 		if pair:
 			tempInd[matePos] = tempRead
 			tempQual[matePos] = tempReadQual
@@ -160,7 +161,7 @@ def makeAllGenos(allMH):
 # of a microhap from low coverage sequencing data
 # within ONE population
 # @param reads a list of iterators. Each iterator (pysam) is for reads for one individual
-# @param pos a list of positions of SNPs (0-based, on reference) in the window
+# @param pos a list of positions of SNPs (1-based, on reference) in the window
 # @param alleleFreq boolean to indicate whether to output allele frequencies (True) or just expectedHet (False)
 # @param minAF minimum allele frequency to keep an allele in the analysis
 # @param epsTemplate the probability that a base in the template is physically wrong (prior to sequencing)
@@ -354,6 +355,191 @@ def iterEM(reads, pos, alleleFreq, minAF, epsTemplate, maxNumHaplotypes, maxSNPs
 	
 	return He
 
+# This is for data that is all one pool of a large number of individuals with
+# no barcodes (i.e., no way to assign reads to individuals)
+# This iteratively runs the EM while dropping alleles to account for
+# windows with lots of SNPs (too many to efficiently consider all possible haplotypes
+# 
+# function to run EM algorithm for estimating either 
+# expected heterozygosity or allele frequencies
+# of a microhap from pooled sequencing data
+# within ONE population
+# @param reads a list of iterators. Each iterator (pysam) is for reads for one bam file, but they
+#    are combined and treated as one input pool
+# @param pos a list of positions of SNPs (1-based, on reference) in the window
+# @param alleleFreq boolean to indicate whether to output allele frequencies (True) or just expectedHet (False)
+# @param minAF minimum allele frequency to keep an allele in the analysis
+# @param epsTemplate the probability that a base in the template is physically wrong (prior to sequencing)
+# @param maxNumHaplotypes maximum number of haplotypes to consider in one round. Note that if
+#    adding one more position exceeds this value, "NA" will be returned
+# @param maxSNPsAdd maximum number of SNPs to add in one iteration of the algorithm
+# @return either the expected heterozygosity as a float or (if not enough information to estimate) the string "NA"
+def poolIterEM(reads, pos, alleleFreq, minAF, epsTemplate, maxNumHaplotypes, maxSNPsAdd):
+	# change pos to 0-based
+	pos = [x - 1 for x in pos]
+	# pull basecalls and quality scores at each position for each individual
+	indReads = []
+	indQuals = []
+	for ind in reads:
+		temp = pullReadsQualsPotenAlleles(ind, pos)
+		# only save if any reads were present
+		if len(temp[0]) > 0:
+			# note the difference here vs barcoded function
+			# Here we are saving these as one long list of reads, not a list of individuals
+			indReads += temp[0]
+			indQuals += temp[1]
+	
+	# calculate some summmary numbers
+	numReads = len(indReads)
+	
+	# make sure there is enough data to continue with the estimates
+	skip = False
+	if numReads < 1:
+		skip = True	# skip if no reads
+	else:
+		# now determine list of potential alleles at each pos
+		# wrapping in an extra list to match input function expects
+		# will throw error if run when numReads = 0
+		allSNPAlleles = SNPpossibleAlleles([indReads])
+		for d in allSNPAlleles:
+			if len(d) == 0: # make sure there is one or more read covering each position
+				# recommend filtering loci like this out prior to running this algorithm
+				# not going to estimate anything for this window since no data for 1+ position
+				skip = True
+				break
+	if skip:
+		lineOut = ["NA", str(numReads)]
+		if alleleFreq:
+			lineOut += ["NA"]
+		return lineOut
+
+	nextPosToAdd = 0 # next SNP to add to estimation routine
+	allMH = [""]
+	af = None
+	L2 = log(2) # saving to avoid repeated computation by interpreter
+	maxIter = 1000 # EM parameter
+	tolerance = .0001 # EM parameter
+	while nextPosToAdd < len(allSNPAlleles):
+		# detemine microhap alleles to consider
+		for i in range(0, maxSNPsAdd):
+			# add the next SNP (at least one)
+			allMHnew = []
+			for a in allSNPAlleles[nextPosToAdd]:
+				allMHnew += [x + a for x in allMH]
+			allMH = allMHnew
+			nextPosToAdd += 1
+			# if at the end OR adding the next SNP would put 
+			# the number of haplotypes over the limit, move to estimation
+			if nextPosToAdd >= len(allSNPAlleles) or (len(allMH) * len(allSNPAlleles[nextPosToAdd])) > maxNumHaplotypes:
+				break
+		
+		# if the addition of one SNP violates the limit on number of 
+		# haplotypes, then can't estimate this window
+		if len(allMH) > maxNumHaplotypes:
+			lineOut = ["NA", str(numReads)]
+			if alleleFreq:
+				lineOut += ["NA"]
+			return lineOut
+				
+		# now we have the list of haplotypes (alleles), so we estimate
+		
+		# calculate log-likelihoods for each allele for each read
+		readLH = np.zeros((len(indReads), len(allMH))) # indices: read, allele; value: likelihood (NOT log)
+		for i in range(0, len(indReads)): # for each read
+			r = indReads[i]
+			q = indQuals[i]
+			for j in range(0, len(allMH)): # for each allele
+				a1 = allMH[j] # character string
+				LH_a1 = 1 # likelihood, NOT log
+				for k in range(0, len(a1)): # for each SNP pos in the allele
+					# is it missing? then skip
+					if r[k] == "N":
+						continue
+					# calc prob of error
+					eps = probSubErr(epsTemplate, q[k])
+					# does it match the allele
+					if r[k] == a1[k]:
+						LH_a1 *= 1 - eps
+					else:
+						LH_a1 *= eps / 3
+				# switching to log-likelihood here
+				# save LLH for read, allele
+				readLH[i,j] = LH_a1
+		
+		# MLE (EM algorithm) for allele frequency
+		
+		# pick starting values
+		if af is None:
+			af = np.repeat(1/len(allMH), len(allMH)) # start off w/ equal frequencies
+		else:
+			afOld = af / (len(allMH) / len(af)) # dividing by number of alleles each allele was split into
+			af = []
+			oldAlleleLength = len(allMHold[0])
+			for a in allMH:
+				for i in range(0, len(allMHold)):
+					if allMHold[i] == a[0:oldAlleleLength]:
+						af += [afOld[i]]
+						break
+			af = np.array(af)
+
+		# initialize some variables
+		# note we're working in likelihood except for totalLLH
+		# since we're working with individual reads, don't have to worry about underflow
+		# unless there are 100+ SNPs or crazy low error rates (like 1e-20)
+		lastLLH = 0
+		alleleProb = np.zeros((readLH.shape[0], readLH.shape[1])) # lh and then posterior of reads(rows) x alleles(columns)
+		for numIter in range(0, maxIter):
+			# now calculate P(Z| read, af)
+			# and calculate likelihood of total model
+			totalLLH = 0
+			for i in range(0, readLH.shape[0]):
+				# calc (relative) probability of each allele
+				# prior * likelihood
+				alleleProb[i,:] = af * readLH[i,:]
+				temp_sum = np.sum(alleleProb[i,:])
+				totalLLH += log(temp_sum)
+				# now normalize
+				alleleProb[i,:] = alleleProb[i,:] / temp_sum
+			
+			# decide whether to break or not
+			if (totalLLH - lastLLH) < tolerance and numIter > 0:
+				break
+			lastLLH = totalLLH
+			
+			# Maximization of LLH for af (calculate af given P(Z))
+			# calc number of each allele (fractional) and normalize
+			af = np.sum(alleleProb,0) / readLH.shape[0]
+			# end for loop for EM
+	
+		# now we either extract alleles that are frequent enough to keep and 
+		# start the next iteration,
+		# or return the results - note no trimming based on minAF if not
+		# running another iteration
+		if nextPosToAdd < len(allSNPAlleles):
+			# there will be another round
+			allMHnew = []
+			newAF = []
+			for i in range(0, len(af)):
+				if af[i] >= minAF:
+					newAF += [af[i]]
+					allMHnew += [allMH[i]]
+			af = np.array(newAF)
+			af = af / np.sum(af) # normalize for starting values of next round
+			allMHold = allMHnew # this is used to identify af starting values in the new round
+			allMH = allMHnew # this is used to build new alleles
+	# end of iterative while loop
+	
+	# calculate He from allele frequency and return
+	He = [str(1 - np.sum(np.power(af, 2))), str(numReads)]
+	
+	# return allele frequencies if indicated
+	if alleleFreq:
+		# allele1:freq,allele2:freq,...
+		afStr = [allMH[i] + ":" + str(af[i]) for i in range(0, len(af))]
+		He += [",".join(afStr)]
+	
+	return He
+
 
 def Main():
 	# defaults
@@ -365,8 +551,9 @@ def Main():
 	af = False # -af, whether to output allele frequencies instead of He
 	minAF = 0.001 # -minAF minimum allele frequency to report allele frequency for
 	epsTemplate = 0.01 # -eps probability a base in the template is wrong
-	maxNumHaplotypes = 128 # -maxH maximum number of haplotypes to try to estimate for
+	maxNumHaplotypes = None # -maxH maximum number of haplotypes to try to estimate for
 	maxSNPsAdd = 4 # -maxS maximum number of SNPs to add in one iteration
+	pooledData = False # -pool whether or not to treat data as individuals or as a pool
 	# get command line inputs
 	flag = 1
 	while flag < len(sys.argv):	#start at 1 b/c 0 is name of script
@@ -390,6 +577,8 @@ def Main():
 			maxSNPsAdd = int(sys.argv[flag])
 		elif sys.argv[flag] == "-af":
 			af = True
+		elif sys.argv[flag] == "-pool":
+			pooledData = True
 		elif sys.argv[flag] == "-minAF":
 			flag += 1
 			minAF = float(sys.argv[flag])
@@ -404,6 +593,14 @@ def Main():
 			return
 		flag += 1
 	# end while loop for command line arguments
+	
+	# differnet default for pooled vs individual data
+	if maxNumHaplotypes is None:
+		if pooledData:
+			maxNumHaplotypes = 256
+		else:
+			maxNumHaplotypes = 128
+	
 	if popMap is None or snpPos is None:
 		print("Error: both -m and -s must be specified")
 		return
@@ -427,7 +624,9 @@ def Main():
 	with open(snpPos, "r") as snpLocations, open(HeOut, "w") as HeOutFile:
 	
 		# write header on output file
-		lineOut = ["Chr", "Pos"] + masterPop + ["NumReads_" + p for p in masterPop] + ["NumInds_" + p for p in masterPop]
+		lineOut = ["Chr", "Pos"] + masterPop + ["NumReads_" + p for p in masterPop]
+		if not pooledData:
+			lineOut += ["NumInds_" + p for p in masterPop]
 		if af:
 			lineOut += ["AlleleFreq_" + p for p in masterPop]
 		HeOutFile.write("\t".join(lineOut) + "\n")
@@ -465,11 +664,15 @@ def Main():
 					# this could be done in the previous loop, but seperating it out
 					# to allow easy transition to calculating each pop in parallel if
 					# later desired
-					tempRes = [iterEM(reads[pop], cur, af, minAF, epsTemplate, maxNumHaplotypes, maxSNPsAdd) for pop in masterPop]
+					if pooledData:
+						tempRes = [poolIterEM(reads[pop], cur, af, minAF, epsTemplate, maxNumHaplotypes, maxSNPsAdd) for pop in masterPop]
+						lineOut = [curChr, ",".join([str(x) for x in cur])] + [i[0] for i in tempRes] + [i[1] for i in tempRes]
+					else:
+						tempRes = [iterEM(reads[pop], cur, af, minAF, epsTemplate, maxNumHaplotypes, maxSNPsAdd) for pop in masterPop]
+						lineOut = [curChr, ",".join([str(x) for x in cur])] + [i[0] for i in tempRes] + [i[1] for i in tempRes] + [i[2] for i in tempRes]
 					# and write to output
-					lineOut = [curChr, ",".join([str(x) for x in cur])] + [i[0] for i in tempRes] + [i[1] for i in tempRes] + [i[2] for i in tempRes]
 					if af:
-						lineOut += [i[3] for i in tempRes]
+						lineOut += [i[3 - pooledData] for i in tempRes]
 					HeOutFile.write("\t".join(lineOut) + "\n")
 				
 				# advance to next window
@@ -500,11 +703,15 @@ def Main():
 			# this could be done in the previous loop, but seperating it out
 			# to allow easy transition to calculating each pop in parallel if
 			# later desired
-			tempRes = [iterEM(reads[pop], cur, af, minAF, epsTemplate, maxNumHaplotypes, maxSNPsAdd) for pop in masterPop]
+			if pooledData:
+				tempRes = [poolIterEM(reads[pop], cur, af, minAF, epsTemplate, maxNumHaplotypes, maxSNPsAdd) for pop in masterPop]
+				lineOut = [curChr, ",".join([str(x) for x in cur])] + [i[0] for i in tempRes] + [i[1] for i in tempRes]
+			else:
+				tempRes = [iterEM(reads[pop], cur, af, minAF, epsTemplate, maxNumHaplotypes, maxSNPsAdd) for pop in masterPop]
+				lineOut = [curChr, ",".join([str(x) for x in cur])] + [i[0] for i in tempRes] + [i[1] for i in tempRes] + [i[2] for i in tempRes]
 			# and write to output
-			lineOut = [curChr, ",".join([str(x) for x in cur])] + [i[0] for i in tempRes] + [i[1] for i in tempRes] + [i[2] for i in tempRes]
 			if af:
-				lineOut += [i[3] for i in tempRes]
+				lineOut += [i[3 - pooledData] for i in tempRes]
 			HeOutFile.write("\t".join(lineOut) + "\n")
 
 		# print some summary information
