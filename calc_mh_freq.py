@@ -5,9 +5,13 @@ import sys
 import pysam
 from math import log, exp
 import numpy as np
+import numba
 
 # log of the sum of the exponents
-# @param a a numpy array, numeric
+# for the individual based function, this function is a significant use of computation time
+# numba speed this up a lot
+# @param a numpy array
+@numba.jit(nopython=True)
 def lse(a):
 	c = a.max()
 	return c + np.log(np.sum(np.exp(a - c)))
@@ -153,6 +157,89 @@ def makeAllGenos(allMH):
 			genos += [[i, j]] # allele1, allele2 INDICIES WITHIN allMH
 	return np.array(genos)
 
+# this is the EM algorithm run within `iterEM()` but implemented
+# as a function so that it can use numba for speed
+@numba.jit(nopython=True)
+def indivEM(genos, indLLH, af, maxIter, tolerance, numAlleles):
+	L2 = log(2) # saving to avoid repeated calculation by interpreter, not sure if this is needed with JIT though?
+	# initialize some variables
+	lastLLH = 0
+	priorZ = np.zeros(genos.shape[0]) # prior prob of all genos
+	genoProb = np.zeros((indLLH.shape[0], genos.shape[0])) # llh and then posterior of individuals(rows) x genotypes(columns)
+	for numIter in range(0, maxIter):
+		# Calculate P(Z|reads, af)
+		# first calculate log of prior prob of each genotype
+		afLog = np.log(af)
+		for i in range(0, genos.shape[0]):
+			if genos[i,0] == genos[i,1]: # homozygous
+				priorZ[i] = 2 * afLog[genos[i,0]]
+			else:
+				priorZ[i] = L2 + afLog[genos[i,0]] + afLog[genos[i,1]]
+		# now calculate P(Z| reads, af)
+		# and calculate likelihood of total model
+		totalLLH = 0
+		for i in range(0, indLLH.shape[0]):
+			# calc (relative) probability of each genotype
+			# prior * likelihood
+			genoProb[i,:] = priorZ + indLLH[i,:]
+			temp_lse = lse(genoProb[i,:])
+			totalLLH += temp_lse
+			# now normalize
+			genoProb[i,:] = np.exp(genoProb[i,:] - temp_lse)
+		
+		# decide whether to break or not
+		if (totalLLH - lastLLH) < tolerance and numIter > 0:
+			break
+		lastLLH = totalLLH
+		
+		# Maximization of LLH for af (calculate af given P(Z))
+		# first calc number of each genotype (fractional)
+		genoProb2 = np.sum(genoProb, 0)
+		# now allele frequency
+		af = np.zeros(numAlleles)
+		for i in range(0, genoProb2.shape[0]):
+			af[genos[i,0]] += genoProb2[i]
+			af[genos[i,1]] += genoProb2[i]
+		# and normalize
+		af = af / (2 * indLLH.shape[0])
+		# end for loop for EM
+	return af
+
+# this is the EM algorithm run within `poolIterEM()` but implemented
+# as a function so that it can use numba for speed
+@numba.jit(nopython=True)
+def poolEM(readLH, maxIter, tolerance, af):
+	# initialize some variables
+	# note we're working in likelihood except for totalLLH
+	# since we're working with individual reads, don't have to worry about underflow
+	# unless there are 100+ SNPs or crazy low error rates (like 1e-20)
+	lastLLH = 0
+	alleleProb = np.zeros((readLH.shape[0], readLH.shape[1])) # lh and then posterior of reads(rows) x alleles(columns)
+	for numIter in range(0, maxIter):
+		# now calculate P(Z| read, af)
+		# and calculate likelihood of total model
+		totalLLH = 0
+		for i in range(0, readLH.shape[0]):
+			# calc (relative) probability of each allele
+			# prior * likelihood
+			alleleProb[i,:] = af * readLH[i,:]
+			temp_sum = np.sum(alleleProb[i,:])
+			totalLLH += log(temp_sum)
+			# now normalize
+			alleleProb[i,:] = alleleProb[i,:] / temp_sum
+		
+		# decide whether to break or not
+		if (totalLLH - lastLLH) < tolerance and numIter > 0:
+			break
+		lastLLH = totalLLH
+		
+		# Maximization of LLH for af (calculate af given P(Z))
+		# calc number of each allele (fractional) and normalize
+		af = np.sum(alleleProb,0) / readLH.shape[0]
+		# end for loop for EM
+	return af
+
+
 # This iteratively runs the EM while dropping alleles to account for
 # windows with lots of SNPs (too many to efficiently consider all possible haplotypes
 # 
@@ -209,7 +296,6 @@ def iterEM(reads, pos, alleleFreq, minAF, epsTemplate, maxNumHaplotypes, maxSNPs
 	nextPosToAdd = 0# next SNP to add to estimation routine
 	allMH = [""]
 	af = None
-	L2 = log(2) # saving to avoid repeated computation by interpreter
 	maxIter = 1000 # EM parameter
 	tolerance = .0001 # EM parameter
 	while nextPosToAdd < len(allSNPAlleles):
@@ -283,48 +369,10 @@ def iterEM(reads, pos, alleleFreq, minAF, epsTemplate, maxNumHaplotypes, maxSNPs
 						af += [afOld[i]]
 						break
 			af = np.array(af)
-
-		lastLLH = 0
-		# initialize some variables
-		priorZ = np.zeros(genos.shape[0]) # prior prob of all genos
-		genoProb = np.zeros((indLLH.shape[0], genos.shape[0])) # llh and then posterior of individuals(rows) x genotypes(columns)
-		for numIter in range(0, maxIter):
-			# Calculate P(Z|reads, af)
-			# first calculate log of prior prob of each genotype
-			afLog = np.log(af)
-			for i in range(0, genos.shape[0]):
-				if genos[i,0] == genos[i,1]: # homozygous
-					priorZ[i] = 2 * afLog[genos[i,0]]
-				else:
-					priorZ[i] = L2 + afLog[genos[i,0]] + afLog[genos[i,1]]
-			# now calculate P(Z| reads, af)
-			# and calculate likelihood of total model
-			totalLLH = 0
-			for i in range(0, indLLH.shape[0]):
-				# calc (relative) probability of each genotype
-				# prior * likelihood
-				genoProb[i,:] = priorZ + indLLH[i,:]
-				temp_lse = lse(genoProb[i,:])
-				totalLLH += temp_lse
-				# now normalize
-				genoProb[i,:] = np.exp(genoProb[i,:] - temp_lse)
-			
-			# decide whether to break or not
-			if (totalLLH - lastLLH) < tolerance and numIter > 0:
-				break
-			lastLLH = totalLLH
-			
-			# Maximization of LLH for af (calculate af given P(Z))
-			# first calc number of each genotype (fractional)
-			genoProb2 = np.sum(genoProb, 0)
-			# now allele frequency
-			af = np.zeros(len(allMH))
-			for i in range(0, genoProb2.shape[0]):
-				af[genos[i,0]] += genoProb2[i]
-				af[genos[i,1]] += genoProb2[i]
-			# and normalize
-			af = af / (2 * indLLH.shape[0])
-			# end for loop for EM
+		
+		# run EM to estimate allele frequencies
+		# written as a function to speed up with numba
+		af = indivEM(genos, indLLH, af, maxIter, tolerance, len(allMH))
 		
 		# now we either extract alleles that are frequent enough to keep and 
 		# start the next iteration,
@@ -416,7 +464,6 @@ def poolIterEM(reads, pos, alleleFreq, minAF, epsTemplate, maxNumHaplotypes, max
 	nextPosToAdd = 0 # next SNP to add to estimation routine
 	allMH = [""]
 	af = None
-	L2 = log(2) # saving to avoid repeated computation by interpreter
 	maxIter = 1000 # EM parameter
 	tolerance = .0001 # EM parameter
 	while nextPosToAdd < len(allSNPAlleles):
@@ -443,7 +490,7 @@ def poolIterEM(reads, pos, alleleFreq, minAF, epsTemplate, maxNumHaplotypes, max
 				
 		# now we have the list of haplotypes (alleles), so we estimate
 		
-		# calculate log-likelihoods for each allele for each read
+		# calculate likelihoods for each allele for each read
 		readLH = np.zeros((len(indReads), len(allMH))) # indices: read, allele; value: likelihood (NOT log)
 		for i in range(0, len(indReads)): # for each read
 			r = indReads[i]
@@ -481,35 +528,9 @@ def poolIterEM(reads, pos, alleleFreq, minAF, epsTemplate, maxNumHaplotypes, max
 						af += [afOld[i]]
 						break
 			af = np.array(af)
-
-		# initialize some variables
-		# note we're working in likelihood except for totalLLH
-		# since we're working with individual reads, don't have to worry about underflow
-		# unless there are 100+ SNPs or crazy low error rates (like 1e-20)
-		lastLLH = 0
-		alleleProb = np.zeros((readLH.shape[0], readLH.shape[1])) # lh and then posterior of reads(rows) x alleles(columns)
-		for numIter in range(0, maxIter):
-			# now calculate P(Z| read, af)
-			# and calculate likelihood of total model
-			totalLLH = 0
-			for i in range(0, readLH.shape[0]):
-				# calc (relative) probability of each allele
-				# prior * likelihood
-				alleleProb[i,:] = af * readLH[i,:]
-				temp_sum = np.sum(alleleProb[i,:])
-				totalLLH += log(temp_sum)
-				# now normalize
-				alleleProb[i,:] = alleleProb[i,:] / temp_sum
-			
-			# decide whether to break or not
-			if (totalLLH - lastLLH) < tolerance and numIter > 0:
-				break
-			lastLLH = totalLLH
-			
-			# Maximization of LLH for af (calculate af given P(Z))
-			# calc number of each allele (fractional) and normalize
-			af = np.sum(alleleProb,0) / readLH.shape[0]
-			# end for loop for EM
+		
+		# run EM (written as a function to use numba)
+		af = poolEM(readLH, maxIter, tolerance, af)
 	
 		# now we either extract alleles that are frequent enough to keep and 
 		# start the next iteration,
@@ -605,7 +626,7 @@ def Main():
 		print("Error: both -m and -s must be specified")
 		return
 	if maxSNPsAdd < 1:
-		print("Error: -ms must be 1 or greater")
+		print("Error: -maxS must be 1 or greater")
 		return
 	
 	print("Window size", wS, "bp")
