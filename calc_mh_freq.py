@@ -9,7 +9,6 @@ import numba
 
 # log of the sum of the exponents
 # for the individual based function, this function is a significant use of computation time
-# numba speed this up a lot
 # @param a numpy array
 @numba.jit(nopython=True)
 def lse(a):
