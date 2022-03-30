@@ -276,6 +276,33 @@ def indGeno(indReads, indQuals, genos, allMH, epsTemplate):
 		indLLH[j] = tempLLH
 	return indLLH
 
+# calculate LH for reads | individual alleles
+# as a function, again, b/c python is _slow_
+# and I need to speed things up
+@numba.jit(nopython=True)
+def calcReadLH(indReads, indQuals, allMH, epsTemplate):
+	readLH = np.zeros((indReads.shape[0], allMH.shape[0])) # indices: read, allele; value: likelihood (NOT log)
+	for i in range(0, indReads.shape[0]): # for each read
+		r = indReads[i,:]
+		q = indQuals[i,:]
+		for j in range(0, allMH.shape[0]): # for each allele
+			a1 = allMH[j] # character string
+			LH_a1 = 1 # likelihood, NOT log
+			for k in range(0, len(a1)): # for each SNP pos in the allele
+				# is it missing? then skip
+				if r[k] == "N":
+					continue
+				# calc prob of error
+				eps = probSubErr(epsTemplate, q[k])
+				# does it match the allele
+				if r[k] == a1[k]:
+					LH_a1 *= 1 - eps
+				else:
+					LH_a1 *= eps / 3
+			# switching to log-likelihood here
+			# save LLH for read, allele
+			readLH[i,j] = LH_a1
+	return readLH
 
 # This iteratively runs the EM while dropping alleles to account for
 # windows with lots of SNPs (too many to efficiently consider all possible haplotypes
@@ -478,6 +505,8 @@ def poolIterEM(reads, pos, alleleFreq, minAF, epsTemplate, maxNumHaplotypes, max
 	af = None
 	maxIter = 1000 # EM parameter
 	tolerance = .0001 # EM parameter
+	indReads = np.array(indReads)
+	indQuals = np.array(indQuals)
 	while nextPosToAdd < len(allSNPAlleles):
 		# detemine microhap alleles to consider
 		for i in range(0, maxSNPsAdd):
@@ -503,27 +532,7 @@ def poolIterEM(reads, pos, alleleFreq, minAF, epsTemplate, maxNumHaplotypes, max
 		# now we have the list of haplotypes (alleles), so we estimate
 		
 		# calculate likelihoods for each allele for each read
-		readLH = np.zeros((len(indReads), len(allMH))) # indices: read, allele; value: likelihood (NOT log)
-		for i in range(0, len(indReads)): # for each read
-			r = indReads[i]
-			q = indQuals[i]
-			for j in range(0, len(allMH)): # for each allele
-				a1 = allMH[j] # character string
-				LH_a1 = 1 # likelihood, NOT log
-				for k in range(0, len(a1)): # for each SNP pos in the allele
-					# is it missing? then skip
-					if r[k] == "N":
-						continue
-					# calc prob of error
-					eps = probSubErr(epsTemplate, q[k])
-					# does it match the allele
-					if r[k] == a1[k]:
-						LH_a1 *= 1 - eps
-					else:
-						LH_a1 *= eps / 3
-				# switching to log-likelihood here
-				# save LLH for read, allele
-				readLH[i,j] = LH_a1
+		readLH = calcReadLH(indReads, indQuals, np.array(allMH), epsTemplate)
 		
 		# MLE (EM algorithm) for allele frequency
 		
