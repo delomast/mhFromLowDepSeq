@@ -12,6 +12,13 @@
  
  Method: Mixture models fit with EM algorithms to infer allele frequencies (will add more here later).
  
+ Note on speed: This is not the fastest function. I recommend running it separately (and concurrently)
+ on each chromosome and/or running it separately for each population. If running populations separately,
+ you should be able to join the results together directly (or using the Chr and Pos columns as keys if 
+ you want to double check). As long as each population is run with the same `-s` input file, `-w` window 
+ size, and `-ms` maximum number of SNPs in a window, these columns should be identical (the same windows 
+ evaluated in the same order).
+
 # Manual
 
 ## Quick examples: 
