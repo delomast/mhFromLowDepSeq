@@ -17,7 +17,9 @@
  you should be able to join the results together directly (or using the Chr and Pos columns as keys if 
  you want to double check). As long as each population is run with the same `-s` input file, `-w` window 
  size, and `-ms` maximum number of SNPs in a window, these columns should be identical (the same windows 
- evaluated in the same order).
+ evaluated in the same order). In some limited speed testing, it seems that using smaller values of `-maxS`, 
+ such as 1, increases speed. Additionally, using the pool method (`-pool`) seems generally faster (at the expense 
+ of model complexity).
 
 # Manual
 
