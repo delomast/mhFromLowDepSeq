@@ -20,9 +20,12 @@ public class CalcHe_mh_vcf {
 	// uses only genotypes for inds that are phased and non-missing
 	// @param vcList contains the VariantContexts of SNPs
 	//   phase with WhatsHap that are in the window
-	public static double[] calcHe(ArrayList<VariantContext> vcList) {
+	public static String[] calcHe(ArrayList<VariantContext> vcList) {
 		double[] ret = new double[]{-1, 0, 0, 0}; // expected Het, number of individuals used, num failed geno, num invalid phase
-		if (vcList.size() < 1) return ret; // make sure there are genotypes
+		if (vcList.size() < 1) {
+			String[] tempRet = new String[]{"NA", "0", "0", "0", "NA"}; // if no useable genotypes, can't estimate
+			return tempRet;
+		}
 		// first, initiate genotypes
 		ArrayList<HaplotypeG> genos = new ArrayList<HaplotypeG>(vcList.get(0).getNSamples());
 		for(int i = 0; i < vcList.get(0).getNSamples(); i++) genos.add(new HaplotypeG(vcList.size()));
@@ -58,13 +61,25 @@ public class CalcHe_mh_vcf {
 				ret[3]++; // called but unphased
 			}
 		}
-		if(ret[1] == 0) return ret; // if no useable genotypes, can't estimate
+		if(ret[1] == 0) {
+			String[] tempRet = new String[]{"NA", "0", "0", "0", "NA"}; // if no useable genotypes, can't estimate
+			return tempRet;
+		}
 		double nAlleles = 2 * ret[1];
 		ret[0] = 1;
-		for(int v : af.values()) {
-			ret[0] -= Math.pow(v / nAlleles, 2);
+		StringBuilder alleleFreq = new StringBuilder(100); 
+		for(List<Byte> v : af.keySet()) {
+			double tempAF = af.get(v)/nAlleles;
+			if(alleleFreq.length() > 0) alleleFreq.append(",");
+			for(Byte b : v) alleleFreq.append((char)b.byteValue());
+			alleleFreq.append(":");
+			alleleFreq.append(tempAF);
+			ret[0] -= Math.pow(tempAF, 2);
 		}
-		return ret;
+		String[] retS = new String[5];
+		for(int i = 0; i < 4; i++) retS[i] = String.valueOf(ret[i]);
+		retS[4] = alleleFreq.toString();
+		return retS;
 	}
 	
 	
@@ -104,7 +119,7 @@ public class CalcHe_mh_vcf {
 		
 //		int testingCounter = 0;
 		BufferedWriter fileOut = Files.newBufferedWriter(Paths.get("vcf_he_output.txt"));
-		fileOut.write("Chr\tPos\tHe\tnumInds\tnumFailGeno\tnumInvalidPhase");
+		fileOut.write("Chr\tPos\tHe\tnumInds\tnumFailGeno\tnumInvalidPhase\tAlleleFreq");
 		fileOut.newLine();
 		while(vcfIter.hasNext()) {
 			vc = vcfIter.next();
@@ -115,7 +130,7 @@ public class CalcHe_mh_vcf {
 				if(vc.getType().equals(VariantContext.Type.SNP)) curSNP.add(vc);
 			} else {
 				// estimate heterozygosity
-				double[] res = calcHe(curSNP);
+				String[] res = calcHe(curSNP);
 				// build up line of output
 				StringBuilder line = new StringBuilder(300); // 300 is too much, but really not THAT much memory
 				// chr pos He numInds numFail numInvalidPhase
@@ -133,6 +148,8 @@ public class CalcHe_mh_vcf {
 				line.append(res[2]);
 				line.append("\t");
 				line.append(res[3]);
+				line.append("\t");
+				line.append(res[4]);
 				// now write out
 				fileOut.write(line.toString());
 				fileOut.newLine(); // add newline
@@ -150,13 +167,13 @@ public class CalcHe_mh_vcf {
 			}
 			
 //			testingCounter++;
-//			if(testingCounter > 300) break; 	
+//			if(testingCounter > 30) break; 	
 		}
 		
 		// handle the last window
 		
 		// estimate heterozygosity
-		double[] res = calcHe(curSNP);
+		String[] res = calcHe(curSNP);
 		// build up line of output
 		StringBuilder line = new StringBuilder(300); // 300 is too much, but really not THAT much memory
 		// chr pos He numInds numFail numInvalidPhase
@@ -174,6 +191,8 @@ public class CalcHe_mh_vcf {
 		line.append(res[2]);
 		line.append("\t");
 		line.append(res[3]);
+		line.append("\t");
+		line.append(res[4]);
 		// now write out
 		fileOut.write(line.toString());
 		fileOut.newLine();
