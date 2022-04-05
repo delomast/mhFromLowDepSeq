@@ -6,6 +6,7 @@ import pysam
 from math import log, exp
 import numpy as np
 import numba
+import random
 
 # log of the sum of the exponents
 # for the individual based function, this function is a significant use of computation time
@@ -320,7 +321,9 @@ def calcReadLH(indReads, indQuals, allMH, epsTemplate):
 #    adding one more position exceeds this value, "NA" will be returned
 # @param maxSNPsAdd maximum number of SNPs to add in one iteration of the algorithm
 # @return either the expected heterozygosity as a float or (if not enough information to estimate) the string "NA"
-def iterEM(reads, pos, alleleFreq, minAF, epsTemplate, maxNumHaplotypes, maxSNPsAdd):
+def iterEM(reads, pos, alleleFreq, minAF, epsTemplate, maxNumHaplotypes, maxSNPsAdd, maxNumReads, rSeed):
+	# set random seed
+	random.seed(rSeed)
 	# change pos to 0-based
 	pos = [x - 1 for x in pos]
 	# pull basecalls and quality scores at each position for each individual
@@ -330,6 +333,11 @@ def iterEM(reads, pos, alleleFreq, minAF, epsTemplate, maxNumHaplotypes, maxSNPs
 		temp = pullReadsQualsPotenAlleles(ind, pos)
 		# only save if any reads were present
 		if len(temp[0]) > 0:
+			# subsample if needed
+			if(len(temp[0]) > maxNumReads):
+				toKeep = random.sample(range(0, len(temp[0])), maxNumReads)
+				temp[0] = [temp[0][x] for x in toKeep]
+				temp[1] = [temp[1][x] for x in toKeep]
 			indReads += [temp[0]]
 			indQuals += [temp[1]]
 	# now determine list of potential alleles at each pos
@@ -461,7 +469,9 @@ def iterEM(reads, pos, alleleFreq, minAF, epsTemplate, maxNumHaplotypes, maxSNPs
 #    adding one more position exceeds this value, "NA" will be returned
 # @param maxSNPsAdd maximum number of SNPs to add in one iteration of the algorithm
 # @return either the expected heterozygosity as a float or (if not enough information to estimate) the string "NA"
-def poolIterEM(reads, pos, alleleFreq, minAF, epsTemplate, maxNumHaplotypes, maxSNPsAdd):
+def poolIterEM(reads, pos, alleleFreq, minAF, epsTemplate, maxNumHaplotypes, maxSNPsAdd, maxNumReads, rSeed):
+	# set random seed
+	random.seed(rSeed)
 	# change pos to 0-based
 	pos = [x - 1 for x in pos]
 	# pull basecalls and quality scores at each position for each individual
@@ -475,6 +485,11 @@ def poolIterEM(reads, pos, alleleFreq, minAF, epsTemplate, maxNumHaplotypes, max
 			# Here we are saving these as one long list of reads, not a list of individuals
 			indReads += temp[0]
 			indQuals += temp[1]
+	# subsample if needed
+	if(len(indReads) > maxNumReads):
+		toKeep = random.sample(range(0, len(indReads)), maxNumReads)
+		indReads = [indReads[x] for x in toKeep]
+		indQuals = [indQuals[x] for x in toKeep]
 	
 	# calculate some summmary numbers
 	numReads = len(indReads)
@@ -596,6 +611,8 @@ def Main():
 	maxNumHaplotypes = None # -maxH maximum number of haplotypes to try to estimate for
 	maxSNPsAdd = 4 # -maxS maximum number of SNPs to add in one iteration
 	pooledData = False # -pool whether or not to treat data as individuals or as a pool
+	maxNumReads = None # -maxR maximum number of reads for a window, either in an individual, or overall if -pool (see defaults below)
+	rSeed = 7 # -r random seed for subsampling reads
 	# get command line inputs
 	flag = 1
 	while flag < len(sys.argv):	#start at 1 b/c 0 is name of script
@@ -611,6 +628,12 @@ def Main():
 		elif sys.argv[flag] == "-ms":
 			flag += 1
 			maxSNPs = int(sys.argv[flag])
+		elif sys.argv[flag] == "-r":
+			flag += 1
+			rSeed = int(sys.argv[flag])
+		elif sys.argv[flag] == "-maxR":
+			flag += 1
+			maxNumReads = int(sys.argv[flag])
 		elif sys.argv[flag] == "-maxH":
 			flag += 1
 			maxNumHaplotypes = int(sys.argv[flag])
@@ -642,6 +665,11 @@ def Main():
 			maxNumHaplotypes = 256
 		else:
 			maxNumHaplotypes = 128
+	if maxNumReads is None:
+		if pooledData:
+			maxNumReads = 40
+		else:
+			maxNumReads = 100
 	
 	if popMap is None or snpPos is None:
 		print("Error: both -m and -s must be specified")
@@ -710,10 +738,10 @@ def Main():
 					# to allow easy transition to calculating each pop in parallel if
 					# later desired
 					if pooledData:
-						tempRes = [poolIterEM(reads[pop], cur, af, minAF, epsTemplate, maxNumHaplotypes, maxSNPsAdd) for pop in masterPop]
+						tempRes = [poolIterEM(reads[pop], cur, af, minAF, epsTemplate, maxNumHaplotypes, maxSNPsAdd, maxNumReads, rSeed) for pop in masterPop]
 						lineOut = [curChr, ",".join([str(x) for x in cur])] + [i[0] for i in tempRes] + [i[1] for i in tempRes]
 					else:
-						tempRes = [iterEM(reads[pop], cur, af, minAF, epsTemplate, maxNumHaplotypes, maxSNPsAdd) for pop in masterPop]
+						tempRes = [iterEM(reads[pop], cur, af, minAF, epsTemplate, maxNumHaplotypes, maxSNPsAdd, maxNumReads, rSeed) for pop in masterPop]
 						lineOut = [curChr, ",".join([str(x) for x in cur])] + [i[0] for i in tempRes] + [i[1] for i in tempRes] + [i[2] for i in tempRes]
 					# and write to output
 					if af:
@@ -749,10 +777,10 @@ def Main():
 			# to allow easy transition to calculating each pop in parallel if
 			# later desired
 			if pooledData:
-				tempRes = [poolIterEM(reads[pop], cur, af, minAF, epsTemplate, maxNumHaplotypes, maxSNPsAdd) for pop in masterPop]
+				tempRes = [poolIterEM(reads[pop], cur, af, minAF, epsTemplate, maxNumHaplotypes, maxSNPsAdd, maxNumReads, rSeed) for pop in masterPop]
 				lineOut = [curChr, ",".join([str(x) for x in cur])] + [i[0] for i in tempRes] + [i[1] for i in tempRes]
 			else:
-				tempRes = [iterEM(reads[pop], cur, af, minAF, epsTemplate, maxNumHaplotypes, maxSNPsAdd) for pop in masterPop]
+				tempRes = [iterEM(reads[pop], cur, af, minAF, epsTemplate, maxNumHaplotypes, maxSNPsAdd, maxNumReads, rSeed) for pop in masterPop]
 				lineOut = [curChr, ",".join([str(x) for x in cur])] + [i[0] for i in tempRes] + [i[1] for i in tempRes] + [i[2] for i in tempRes]
 			# and write to output
 			if af:
