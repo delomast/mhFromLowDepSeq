@@ -19,7 +19,8 @@
  size, and `-ms` maximum number of SNPs in a window, these columns should be identical (the same windows 
  evaluated in the same order). In some limited speed testing, it seems that using smaller values of `-maxS`, 
  such as 1, increases speed. Additionally, using the pool method (`-pool`) seems generally faster (at the expense 
- of model complexity).
+ of model complexity). Also note that since it uses numba, there is some fixed compilation time at the start of 
+ the script. For analyses of realistic size, this extra time is quickly made up.
 
 # Manual
 
@@ -58,4 +59,3 @@ with no knowledge of which reads came from which individual
 - `-maxR INT` The maximum number of reads within a window to consider for a given individual or, if `-pool` is used, for the entire pool. If more reads
 are present, a random subsample is taken. default for individual based analyses: 40 reads per individual; for `-pool` analyses: 100 reads total.
 - `-r INT` The seed to use for random subsampling of reads when a window exceeds `-maxR`. default is 7
-
