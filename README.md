@@ -12,7 +12,9 @@
  
  Method: Mixture models fit with EM algorithms to infer allele frequencies (will add more here later).
  
- Note on speed: This is not the fastest function. I recommend running it separately (and concurrently)
+ Limitations: Can only handle substitution SNPs, computation is a little on the slow side
+ 
+ Note on speed: I recommend running it separately (and concurrently)
  on each chromosome and/or running it separately for each population. If running populations separately,
  you should be able to join the results together directly (or using the Chr and Pos columns as keys if 
  you want to double check). As long as each population is run with the same `-s` input file, `-w` window 
@@ -40,7 +42,7 @@ python3 calc_mh_freq.py -m bamfileToPopulations.txt -s known_snps.txt -o outputF
  
 - `-m FILE` a tab delimited text file with _no_ header that maps bam files (pools or individuals, first column) to 
 populations (second column). bamFilePath \t popName
-- `-s FILE` a tab delimited text file with _no_ header that indicates the positions of SNPs. First 
+- `-s FILE` a tab delimited text file with _no_ header that indicates the positions of substitution SNPs (no indels). First 
 column is the chromosome name and second column is the 1-based position. Variants _must_ be sorted by chromosome
 and by position, with position sorted from smallest to largest. Chr \t Position
 - `-w INT` window size for defining microhaplotypes. default 125
