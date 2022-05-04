@@ -26,6 +26,9 @@
 
 # Manual
 
+ To use the method, the only file you need to download from this repository is `calc_mh_freq.py`. The 
+ other files are only included because they are relevant to the analyses discussed in ...
+
 ## Quick examples: 
 
 For low coverage data from multiple individuals
