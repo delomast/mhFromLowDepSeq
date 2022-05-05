@@ -39,17 +39,19 @@ def probSubErr(eps, e2):
 # while maintaing phase from the (optionally paired) reads
 # @param ind an iterator (pysam) for reads for one bam file (often one individual)
 # @param pos a list of 0-based positions (in the reference) to pull base calls for
+# @parm readGroups True to separate into individuals by read groups, False to not
 # @param return a list of [listOne, listTwo] where listOne is a list of lists 
 #    representing basecalls within each read, e.g. [[A, C, N], [A, C, A], [G, C, A]] with each
 #    read being in the same order as pos. N can either be N present in the read OR the read did 
 #    not cover that position. listTwo is similar but has Q scores (converted to int 
 #    and 33 substracted already by pysam)
-def pullReadsQualsPotenAlleles(ind, pos):
+def pullReadsQualsPotenAlleles(ind, pos, readGroups, headerRG = None):
 	maxI = len(pos) # used several times below
 	# pull relevant sites and Qual scores from reads for each individual
 	readNames = []
 	tempInd = []
 	tempQual = []
+	rg = []
 	for r in ind: # for each read
 		# get base calls for SNPs
 		j = r.reference_start # position in the reference, 0 based
@@ -122,6 +124,30 @@ def pullReadsQualsPotenAlleles(ind, pos):
 			tempInd += [tempRead]
 			tempQual += [tempReadQual]
 			readNames += [r.query_name]
+			# record read group if needed
+			if readGroups:
+				tempRG = None
+				for tag in r.get_tags():
+					if tag[0] == "RG":
+						tempRG = tag[1]
+						break
+				if tempRG is None:
+					raise RuntimeError("read found without read group")
+				rg += [headerRG[tempRG]]
+	
+	# sort read groups if needed
+	if readGroups:
+		tempIndDict = {}
+		tempQualDict = {}
+		for i in range(0, len(tempInd)):
+			tempIndDict[rg[i]] = tempIndDict.get(rg[i], []) + [tempInd[i]]
+			tempQualDict[rg[i]] = tempQualDict.get(rg[i], []) + [tempQual[i]]
+		tempInd = []
+		tempQual = []
+		for k in tempIndDict.keys():
+			tempInd += [tempIndDict[k]]
+			tempQual += [tempQualDict[k]]
+	
 	return [tempInd, tempQual]
 
 # wonder if this would be much faster by coercing it to a numpy matrix or pandas df and
@@ -321,7 +347,7 @@ def calcReadLH(indReads, indQuals, allMH, epsTemplate):
 #    adding one more position exceeds this value, "NA" will be returned
 # @param maxSNPsAdd maximum number of SNPs to add in one iteration of the algorithm
 # @return either the expected heterozygosity as a float or (if not enough information to estimate) the string "NA"
-def iterEM(reads, pos, alleleFreq, minAF, epsTemplate, maxNumHaplotypes, maxSNPsAdd, maxNumReads, rSeed):
+def iterEM(reads, pos, alleleFreq, minAF, epsTemplate, maxNumHaplotypes, maxSNPsAdd, maxNumReads, rSeed, readGroups, headerRG = None):
 	# set random seed
 	random.seed(rSeed)
 	# change pos to 0-based
@@ -330,16 +356,29 @@ def iterEM(reads, pos, alleleFreq, minAF, epsTemplate, maxNumHaplotypes, maxSNPs
 	indReads = []
 	indQuals = []
 	for ind in reads:
-		temp = pullReadsQualsPotenAlleles(ind, pos)
-		# only save if any reads were present
-		if len(temp[0]) > 0:
-			# subsample if needed
-			if(len(temp[0]) > maxNumReads):
-				toKeep = random.sample(range(0, len(temp[0])), maxNumReads)
-				temp[0] = [temp[0][x] for x in toKeep]
-				temp[1] = [temp[1][x] for x in toKeep]
-			indReads += [temp[0]]
-			indQuals += [temp[1]]
+		temp = pullReadsQualsPotenAlleles(ind, pos, readGroups, headerRG)
+		if readGroups:
+			# either the whole thing is empty, [[],[]] or there is all entries are non-zero length
+			# b/c only read groups that are present are considered
+			if len(temp[0]) > 0:
+				for i in range(0, len(temp[0])): # fro each individual
+					# subsample if needed
+					if(len(temp[0][i]) > maxNumReads):
+						toKeep = random.sample(range(0, len(temp[0][i])), maxNumReads)
+						temp[0][i] = [temp[0][i][x] for x in toKeep]
+						temp[1][i] = [temp[1][i][x] for x in toKeep]
+					indReads += [temp[0][i]]
+					indQuals += [temp[1][i]]
+		else:
+			# only save if any reads were present
+			if len(temp[0]) > 0:
+				# subsample if needed
+				if(len(temp[0]) > maxNumReads):
+					toKeep = random.sample(range(0, len(temp[0])), maxNumReads)
+					temp[0] = [temp[0][x] for x in toKeep]
+					temp[1] = [temp[1][x] for x in toKeep]
+				indReads += [temp[0]]
+				indQuals += [temp[1]]
 	# now determine list of potential alleles at each pos
 	allSNPAlleles = SNPpossibleAlleles(indReads)
 	
@@ -478,7 +517,7 @@ def poolIterEM(reads, pos, alleleFreq, minAF, epsTemplate, maxNumHaplotypes, max
 	indReads = []
 	indQuals = []
 	for ind in reads:
-		temp = pullReadsQualsPotenAlleles(ind, pos)
+		temp = pullReadsQualsPotenAlleles(ind, pos, False)
 		# only save if any reads were present
 		if len(temp[0]) > 0:
 			# note the difference here vs barcoded function
@@ -609,10 +648,11 @@ def Main():
 	minAF = 0.001 # -minAF minimum allele frequency to keep in the model when iterating over a large window
 	epsTemplate = 0.01 # -eps probability a base in the template is wrong
 	maxNumHaplotypes = None # -maxH maximum number of haplotypes to try to estimate for
-	maxSNPsAdd = 4 # -maxS maximum number of SNPs to add in one iteration
+	maxSNPsAdd = 1 # -maxS maximum number of SNPs to add in one iteration
 	pooledData = False # -pool whether or not to treat data as individuals or as a pool
 	maxNumReads = None # -maxR maximum number of reads for a window, either in an individual, or overall if -pool (see defaults below)
 	rSeed = 7 # -r random seed for subsampling reads
+	readGroups = False # -rg to separate reads in the bam files by read group SM into individuals, ignored if -pool is specified. RG ID and SM must be unique within pops
 	# get command line inputs
 	flag = 1
 	while flag < len(sys.argv):	#start at 1 b/c 0 is name of script
@@ -653,6 +693,8 @@ def Main():
 		elif sys.argv[flag] == "-o":
 			flag += 1
 			HeOut = sys.argv[flag]
+		elif sys.argv[flag] == "-rg":
+			readGroups = True
 		else:
 			print("Error: option", sys.argv[flag], "not recognized.")
 			return
@@ -667,9 +709,9 @@ def Main():
 			maxNumHaplotypes = 128
 	if maxNumReads is None:
 		if pooledData:
-			maxNumReads = 40
-		else:
 			maxNumReads = 100
+		else:
+			maxNumReads = 40
 	
 	if popMap is None or snpPos is None:
 		print("Error: both -m and -s must be specified")
@@ -692,7 +734,20 @@ def Main():
 			line = fileIn.readline()
 	# list of pop names so output can have a consistent order
 	masterPop = [p for p in popDict]
-		
+	
+	# extract read groups from header(s) if needed
+	if not pooledData:
+		headerRG = {} # key is popName, value is dictionary {key is RG ID, value is RG SM}
+		for p in masterPop:
+			if readGroups:
+				headerRG[p] = {}
+				for tempAlignmentFile in popDict[p]:
+					tempHeader = tempAlignmentFile.header.to_dict()["RG"]
+					for line in tempHeader:
+						headerRG[p][line["ID"]] = line["SM"]
+			else:
+				headerRG[p] = None
+	
 	# run sliding window across target SNP file
 	with open(snpPos, "r") as snpLocations, open(HeOut, "w") as HeOutFile:
 	
@@ -741,7 +796,7 @@ def Main():
 						tempRes = [poolIterEM(reads[pop], cur, af, minAF, epsTemplate, maxNumHaplotypes, maxSNPsAdd, maxNumReads, rSeed) for pop in masterPop]
 						lineOut = [curChr, ",".join([str(x) for x in cur])] + [i[0] for i in tempRes] + [i[1] for i in tempRes]
 					else:
-						tempRes = [iterEM(reads[pop], cur, af, minAF, epsTemplate, maxNumHaplotypes, maxSNPsAdd, maxNumReads, rSeed) for pop in masterPop]
+						tempRes = [iterEM(reads[pop], cur, af, minAF, epsTemplate, maxNumHaplotypes, maxSNPsAdd, maxNumReads, rSeed, readGroups, headerRG[pop]) for pop in masterPop]
 						lineOut = [curChr, ",".join([str(x) for x in cur])] + [i[0] for i in tempRes] + [i[1] for i in tempRes] + [i[2] for i in tempRes]
 					# and write to output
 					if af:
@@ -780,7 +835,7 @@ def Main():
 				tempRes = [poolIterEM(reads[pop], cur, af, minAF, epsTemplate, maxNumHaplotypes, maxSNPsAdd, maxNumReads, rSeed) for pop in masterPop]
 				lineOut = [curChr, ",".join([str(x) for x in cur])] + [i[0] for i in tempRes] + [i[1] for i in tempRes]
 			else:
-				tempRes = [iterEM(reads[pop], cur, af, minAF, epsTemplate, maxNumHaplotypes, maxSNPsAdd, maxNumReads, rSeed) for pop in masterPop]
+				tempRes = [iterEM(reads[pop], cur, af, minAF, epsTemplate, maxNumHaplotypes, maxSNPsAdd, maxNumReads, rSeed, readGroups, headerRG[pop]) for pop in masterPop]
 				lineOut = [curChr, ",".join([str(x) for x in cur])] + [i[0] for i in tempRes] + [i[1] for i in tempRes] + [i[2] for i in tempRes]
 			# and write to output
 			if af:
