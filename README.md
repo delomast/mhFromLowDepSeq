@@ -45,12 +45,12 @@
 
 For low coverage data from multiple individuals
 ```
-python3 calc_mh_freq.py -m indsToPopulations.txt -s known_snps.txt -o outputFile.txt -af -w 65
+python3 calc_mh_freq.py -m ./example/filePop.txt -s ./example/snpLoc.txt -o output.txt -af -w 65
 ```
 
 For pooled data (can't assign reads to individuals)
 ```
-python3 calc_mh_freq.py -m bamfileToPopulations.txt -s known_snps.txt -o outputFile.txt -af -w 65 -pool
+python3 calc_mh_freq.py -m ./example/filePop.txt -s ./example/snpLoc.txt -o outputPool.txt -af -w 65 -pool
 ```
 
 ## Command line options

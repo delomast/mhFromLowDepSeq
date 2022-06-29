@@ -1,0 +1,3 @@
+samp1.bam	Pop1
+samp2.bam	Pop1
+samp3.bam	Pop1
