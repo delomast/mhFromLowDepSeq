@@ -1,8 +1,6 @@
 # mhFromLowDepSeq
  Identify microhaplotypes from low depth sequencing data
  
- Under development. Not ready for release.
- 
  Situation: You have either pooled sequencing data (sequencing data for a bunch of individuals 
  with no barcodes or other means of identifying which reads came from which individual) or you 
  have low coverage sequencing data for a bunch of individuals (not enough to reliably call genotypes).
@@ -10,9 +8,16 @@
  Desired outcome: Allele frequencices and/or expected heterozygosity for microhaps in the population 
  that was sequenced.
  
- Method: Mixture models fit with EM algorithms to infer allele frequencies (will add more here later).
+ Method: Mixture models fit with EM algorithms to infer allele frequencies (see full description in ...).
  
- Limitations: Can only handle substitution SNPs, computation is a little on the slow side
+ Limitations: Can only handle substitution SNPs
+ 
+ # A few notes
+
+ To use the method, the only file you need to download from this repository is `calc_mh_freq.py` 
+ (and I might recommend the `example` directory). The 
+ other files are only included because they are relevant to the analyses discussed in ...
+
  
  Note on speed: I recommend running it separately (and concurrently)
  on each chromosome and/or running it separately for each population. If running populations separately,
@@ -37,9 +42,6 @@
  repurcussions that you may cause, particularly if you use the file(s) for something else.
 
 # Manual
-
- To use the method, the only file you need to download from this repository is `calc_mh_freq.py`. The 
- other files are only included because they are relevant to the analyses discussed in ...
 
 ## Quick examples: 
 
