@@ -15,7 +15,7 @@
  # A few notes
 
  To use the method, the only file you need to download from this repository is `calc_mh_freq.py` 
- (and I might recommend the `example` directory). The 
+ (and I might also recommend the `example` directory). The 
  other files are only included because they are relevant to the analyses discussed in ...
 
  
@@ -70,7 +70,7 @@ output for this window). default 25
 - `-minAF FLOAT` minimum allele frequency to keep an allele in the model when pruning. Note that pruning is _not_ performed after the 
 last cycle, so the final result may have alleles with frequencies below this minimum. default 0.001
 - `-eps FLOAT` probability a base in the template is wrong, should be > 0 and < 1. default 0.01
-- `-maxH INT` maximum number of haplotypes to try to estimate results for. If this is exceeded, the window is skipped and NA is output. default is 128 for 
+- `-maxH INT` maximum number of alleles to try to estimate results for. If this is exceeded, the window is skipped and NA is output. default is 128 for 
 low coverage data from individuals and 256 for pooled data (option `-pool` is used)
 - `-maxS INT` maximum number of SNPs to add in one iteration. Must be > 0. default 1
 - `-pool` include this argument to treat data (even if multiple bam files per population are provided) as a pool. default is to treat data as coming from individuals
