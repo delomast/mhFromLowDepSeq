@@ -58,7 +58,7 @@ python3 calc_mh_freq.py -m ./example/filePop.txt -s ./example/snpLoc.txt -o outp
 ## Command line options
  
 - `-m FILE` a tab delimited text file with _no_ header that maps bam files (pools or individuals, first column) to 
-populations (second column). bamFilePath \t popName
+populations (second column). The bam files _must_ be sorted by position and indexed. bamFilePath \t popName
 - `-s FILE` a tab delimited text file with _no_ header that indicates the positions of substitution SNPs (no indels). First 
 column is the chromosome name and second column is the 1-based position. Variants _must_ be sorted by chromosome
 and by position, with position sorted from smallest to largest. Chr \t Position
