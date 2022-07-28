@@ -109,7 +109,7 @@ def pullReadsQualsPotenAlleles(ind, pos, readGroups, headerRG = None):
 					c += 1
 				elif r.cigartuples[cPos][0] in (5,6):
 					# hard clip or padding, do nothing
-					pass
+					c += 1
 				else:
 					raise RuntimeError("unrecognized CIGAR operation")
 				# check if passed SNP
