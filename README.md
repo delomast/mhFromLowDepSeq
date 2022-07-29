@@ -19,16 +19,16 @@
  other files are only included because they are relevant to the analyses discussed in ...
 
  
- Note on speed: I recommend running it separately (and concurrently)
- on each chromosome and/or running it separately for each population. If running populations separately,
+ Note on speed: Combining all reads into a single BAM file (and identiifying 
+ individuals with read groups, if you have data for individuals) is significantly quicker than having one BAM file 
+ for each individual (sorting reads by read group internally is quicker than multiple BAM reading operations).
+ To speed things up, you can run it separately (and concurrently)
+ on each chromosome and/or population. If running populations separately,
  you should be able to join the results together directly (or using the Chr and Pos columns as keys if 
  you want to double check). As long as each population is run with the same `-s` input file, `-w` window 
  size, and `-ms` maximum number of SNPs in a window, these columns should be identical (the same windows 
  evaluated in the same order). In some limited speed testing, it seems that using smaller values of `-maxS`, 
- such as 1, increases speed. It also seems that combining all reads into a single BAM file (and identiifying 
- individuals with read groups, if you have data for individuals) is significantly quicker than having one BAM file 
- for each individual (sorting reads by read group internally is quicker than multiple BAM reading operations). 
- Additionally, using the pool method (`-pool`) seems generally faster (at the expense 
+ such as 1, increases speed. Additionally, using the pool method (`-pool`) is generally faster (at the expense 
  of model complexity). Also note that since it uses numba, there is some fixed compilation time at the start of 
  the script. For analyses of realistic size, this extra time is quickly made up.
  
