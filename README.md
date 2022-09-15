@@ -55,6 +55,16 @@ For pooled data (can't assign reads to individuals)
 python3 calc_mh_freq.py -m ./example/filePop.txt -s ./example/snpLoc.txt -o outputPool.txt -af -w 65 -pool
 ```
 
+## Output file
+
+The output file is a tab-delimited text file with each line representing a microhaplotype locus. The first two 
+columns give the chromosome name and the positions of SNPs (comma-separated) in the locus. The following columns 
+give the expected heterozygosity for each population and are titled by the population name. The next columns 
+give the number of reads used to inform the estimate for each population and are titled as NumReads\_[PopName]. 
+If using the "individual-based" mode, the next columns give the number of individuals that contributed at least 
+one read to the estimate and are titled as NumInds\_[PopName]. If the `-af` option is specified, the next columns 
+give the allele frequencies estimated for each population and are titled as AlleleFreq\_[PopName].
+
 ## Command line options
  
 - `-m FILE` a tab delimited text file with _no_ header that maps bam files (pools or individuals, first column) to 
