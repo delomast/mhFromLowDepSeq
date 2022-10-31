@@ -44,12 +44,17 @@ public class CalcHe_mh_vcf {
 				// if we're good, then add to haplotypes
 				genos.get(i).a1.add(g.getAllele(0).getBases()[0]);
 				genos.get(i).a2.add(g.getAllele(1).getBases()[0]);
-				if(g.isHet()) genos.get(i).phaseSet.add(g.isPhased() ? g.getExtendedAttribute("PS") : ".");	
+				if(g.isHet()) {
+					genos.get(i).phaseSet.add(g.isPhased() ? g.getExtendedAttribute("PS") : ".");
+					genos.get(i).numHet++;
+				}
+				
 			}	
 		}
 		// calculate He
 		Map<List<Byte>, Integer> af = new HashMap<List<Byte>, Integer>();
 		for(HaplotypeG g : genos) {
+			
 			// count if haplotypes are called and fully phased
 			if(!g.isCalled) {
 				ret[2]++;
@@ -85,6 +90,7 @@ public class CalcHe_mh_vcf {
 	
 
 	public static void main(String[] args) throws IOException {
+		
 		int wSinput = 125;
 		String vcfInPath = null;
 		int flag = 0;
