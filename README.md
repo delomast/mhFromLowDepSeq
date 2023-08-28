@@ -91,3 +91,9 @@ are present, a random subsample is taken. default for individual based analyses:
 - `-rg` include this argument to split reads within _ONE_ BAM file into separate samples based on the read group SM tag. Note that 
   __all reads for a given sample must be in one BAM file__. If you use this option, it is __strongly__ recommended that you only input one BAM 
   file for each population.
+
+
+
+
+This software is a "United States Government Work" under the terms of the United States Copyright Act. It was written as part of the authors' official 
+duties as United States Government employees and thus cannot be copyrighted. This software is freely available to the public for use.
