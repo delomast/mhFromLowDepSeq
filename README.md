@@ -86,8 +86,7 @@ last cycle, so the final result may have alleles with frequencies below this min
 - `-maxH INT` maximum number of alleles to try to estimate results for. If this is exceeded, the window is skipped and NA is output. default is 128 for 
 low coverage data from individuals and 256 for pooled data (option `-pool` is used)
 - `-maxS INT` maximum number of SNPs to add in one iteration. Must be > 0. default 1
-- `-pool` include this argument to treat data (even if multiple bam files per population are provided) as a pool. default is to treat data as coming from individuals
-with no knowledge of which reads came from which individual
+- `-pool` include this argument to treat data (even if multiple bam files per population are provided) as a pool. default (when this argument is not given) is to treat data as coming from individuals
 - `-maxR INT` The maximum number of reads within a window to consider for a given individual or, if `-pool` is used, for the entire pool. If more reads
 are present, a random subsample is taken. default for individual based analyses: 40 reads per individual; for `-pool` analyses: 100 reads total. 
 - `-r INT` The seed to use for random subsampling of reads when a window exceeds `-maxR`. default is 7
