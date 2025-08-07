@@ -8,15 +8,18 @@
  Desired outcome: Allele frequencices and/or expected heterozygosity for microhaps in the population 
  that was sequenced.
  
- Method: Mixture models fit with EM algorithms to infer allele frequencies (see full description in ...).
+ Method: Mixture models fit with EM algorithms to infer allele frequencies (see full description in Delomas and Willis 2023).
  
  Limitations: Can only handle substitution SNPs
+
+ Delomas, T. A., & Willis, S. C. (2023). Estimating microhaplotype allele frequencies from low-coverage or pooled sequencing data. 
+ BMC Bioinformatics, 24(1), 415. https://doi.org/10.1186/s12859-023-05554-z
  
  # A few notes
 
  To use the method, the only file you need to download from this repository is `calc_mh_freq.py` 
  (and I might also recommend the `example` directory). The 
- other files are only included because they are relevant to the analyses discussed in ...
+ other files are only included because they are relevant to the analyses discussed in Delomas and Willis (2023).
 
  
  Note on speed: Combining all reads into a single BAM file (and identiifying 
